@@ -1,0 +1,141 @@
+{
+  "projectType": "saas",
+  "projectName": "Kairo",
+  "projectDescription": "Kairo is an AI-powered personalized learning platform for Riwi bootcamps that analyzes academic data and soft skills to generate adaptive 4-week growth plans for coders, with a Team Leader analytics dashboard for proactive mentorship.",
+  "theme": "almond",
+  "primaryColor": "#6366F1",
+  "lightColor": "#EEF2FF",
+  "darkColor": "#312E81",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Overview",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "architecture"
+            ]
+          },
+          {
+            "group": "Setup",
+            "pages": [
+              "setup/environment",
+              "setup/database",
+              "setup/running-locally"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Platform Guide",
+        "groups": [
+          {
+            "group": "For Coders",
+            "pages": [
+              "coder/onboarding",
+              "coder/dashboard",
+              "coder/learning-plans",
+              "coder/ai-trainer",
+              "coder/progress-tracking"
+            ]
+          },
+          {
+            "group": "For Team Leaders",
+            "pages": [
+              "tl/dashboard",
+              "tl/coder-analytics",
+              "tl/risk-detection",
+              "tl/feedback"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Node.js Gateway",
+            "pages": [
+              "api/auth",
+              "api/coder",
+              "api/tl",
+              "api/diagnostics",
+              "api/assignments",
+              "api/notifications",
+              "api/profile"
+            ]
+          },
+          {
+            "group": "AI Microservice",
+            "pages": [
+              "api/ai/overview",
+              "api/ai/generate-plan",
+              "api/ai/focus-cards",
+              "api/ai/chat",
+              "api/ai/exercises",
+              "api/ai/reports",
+              "api/ai/resources"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Database",
+        "groups": [
+          {
+            "group": "Schema",
+            "pages": [
+              "database/overview",
+              "database/schema",
+              "database/enums"
+            ]
+          },
+          {
+            "group": "Migrations",
+            "pages": [
+              "database/migrations",
+              "database/rls-policies"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "AI-generated personalized 4-week learning plans (6 priority-ranked cards per coder)",
+    "Soft skills assessment integrated into adaptive curriculum generation",
+    "Team Leader analytics dashboard with real-time risk detection",
+    "AI chat trainer (Groq LLM + LangChain) for on-demand learning support",
+    "Moodle progress integration to track academic performance",
+    "Automated risk flags for at-risk students (low scores or autonomy)",
+    "GitHub and Google OAuth social login",
+    "Real-time notifications via Supabase Realtime",
+    "Exercise generation and submission with AI evaluation",
+    "Resource search via semantic embeddings (all-MiniLM-L6-v2)"
+  ],
+  "publicApiSurface": [
+    "POST /api/auth/login",
+    "POST /api/auth/register",
+    "GET /api/auth/github",
+    "GET /api/auth/google",
+    "GET /api/coder/dashboard",
+    "GET /api/coder/plans",
+    "GET /api/tl/dashboard",
+    "GET /api/tl/coders",
+    "POST /api/diagnostics",
+    "GET /api/notifications",
+    "GET /api/profile",
+    "POST /api/ai/generate-plan",
+    "POST /api/ai/generate-focus-cards",
+    "POST /api/ai/chat/ask",
+    "POST /api/ai/generate-report",
+    "POST /api/ai/generate-exercise",
+    "POST /api/ai/exercise/{id}/submit",
+    "POST /api/ai/search-resources",
+    "GET /api/health",
+    "GET /api/ai/health"
+  ]
+}
