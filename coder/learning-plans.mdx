@@ -1,0 +1,154 @@
+---
+title: "Learning plans"
+description: "Understand how Kairo generates your 6 personalized learning plan cards and how to work through them."
+---
+
+Kairo generates up to **6 learning plan cards** for each coder, stored in the `complementary_plans` table. These cards are the core of the personalized learning experience: each one is a focused study plan covering 20 days of daily activities, built specifically around your academic gaps and learning style.
+
+## How plans are generated
+
+The AI plan generation pipeline runs in the background — you never trigger it manually after the initial onboarding.
+
+<Steps>
+  <Step title="Weakness detection">
+    The system evaluates two conditions from your data:
+
+    - `moodle_progress.average_score < 70` — your Moodle academic score is below threshold
+    - `soft_skills_assessment.autonomy ≤ 2` — your autonomy score indicates you need more structured support
+
+    Either condition (or both) triggers plan generation. The specific topics where you are struggling are read from `moodle_progress.struggling_topics` and `coder_struggling_topics`.
+  </Step>
+
+  <Step title="Context assembly">
+    The Node.js backend sends a request to the Python microservice (`POST /generate-plan`) with your full context:
+
+    ```json
+    {
+      "coder_id": 42,
+      "module_id": 4,
+      "plan_type": "interpretive",
+      "current_week": 3
+    }
+    ```
+
+    The Python service reads your `soft_skills_assessment` and `moodle_progress` rows directly from the database to build the prompt.
+  </Step>
+
+  <Step title="AI generation via Groq">
+    The Python microservice sends a structured prompt to the **Groq LLM**. The prompt combines:
+    - Your learning style (`visual`, `auditory`, `kinesthetic`, or `mixed`)
+    - Your five soft skill scores
+    - Your struggling topics for the current module
+    - The module context and current week
+
+    Groq returns a structured plan with 20 days of activities.
+  </Step>
+
+  <Step title="Plans saved to database">
+    The Python service inserts 6 rows into `complementary_plans` — 2 with `priority_level = 'high'`, 2 with `'medium'`, and 2 with `'low'`. Each plan's `plan_content` is stored as JSONB.
+
+    Every operation is recorded in `ai_generation_log` for auditing.
+  </Step>
+
+  <Step title="Activities created per plan">
+    For each plan, daily activities are inserted into `plan_activities` — one row per day (`day_number` 1–20). Each activity has:
+
+    - `title` and `description`
+    - `estimated_time_minutes`
+    - `activity_type`: `guided`, `semi_guided`, or `autonomous`
+    - `skill_focus`: the specific soft skill or technical topic targeted
+  </Step>
+
+  <Step title="Cards appear on your dashboard">
+    Your 6 cards are now visible on the dashboard and in the AI Trainer view, sorted: 2 high (red), 2 medium (yellow), 2 low (green).
+  </Step>
+</Steps>
+
+## Priority system
+
+The `priority_level` field on each `complementary_plans` row controls how cards are sorted and colored in the UI:
+
+| Priority | Count | Color | Meaning |
+|----------|-------|-------|---------|
+| `high` | 2 | Red | Urgent gaps — address these first |
+| `medium` | 2 | Yellow | Important reinforcement — work through these this week |
+| `low` | 2 | Green | Supplementary enrichment — complete at your own pace |
+
+## Activity types
+
+Each day's `plan_activities` row has an `activity_type` that tells you how much structure you should expect:
+
+| Type | Description |
+|------|-------------|
+| `guided` | Step-by-step instructions provided — follow along exactly |
+| `semi_guided` | A starting point and hints are given — fill in the rest yourself |
+| `autonomous` | A goal is defined — you choose how to reach it |
+
+Activities earlier in a plan tend to be `guided`; later days shift toward `autonomous` as you build confidence.
+
+## Working through a plan
+
+### Marking activities complete
+
+When you finish a day's work in the AI Trainer, click **Completado**. This calls:
+
+```http
+POST /api/coder/plan/:planId/day/:day/complete
+```
+
+The server updates `complementary_plans.completed_days` (a JSONB object keyed by day number) and inserts rows into `activity_progress`:
+
+```sql
+INSERT INTO activity_progress (activity_id, coder_id, completed, completed_at)
+VALUES ($1, $2, true, NOW())
+ON CONFLICT (activity_id, coder_id)
+DO UPDATE SET completed = true, completed_at = NOW();
+```
+
+Completing a day awards **Kairo Score** points. Completing all 20 days awards a bonus.
+
+### Submitting evidence
+
+For activities that require you to show your work, you can submit evidence via the Activities screen. Evidence can be a file upload or a URL:
+
+```sql
+INSERT INTO evidence_submissions (
+  activity_id,
+  coder_id,
+  file_url,    -- path to uploaded file, or NULL
+  link_url,    -- external URL (e.g., GitHub repo), or NULL
+  description
+)
+```
+
+Your TL can review submitted evidence and will send feedback via `tl_feedback`.
+
+## Checking plan progress
+
+To fetch your current active plan with all activities:
+
+```http
+GET /api/coder/plan
+```
+
+Response includes `completedDays` (the JSONB object), `currentDay` (the first incomplete day), `completedCount`, and `isComplete`.
+
+To fetch the full activity list for a specific plan:
+
+```http
+GET /api/coder/plans/:planId
+```
+
+<Note>
+  Once a plan completes (all 20 days marked), the next plan is generated automatically the following Monday based on your updated Moodle progress.
+</Note>
+
+## Database tables
+
+| Table | Role |
+|-------|------|
+| `complementary_plans` | One row per card; holds `priority_level`, `plan_content`, `is_active`, `completed_days` |
+| `plan_activities` | Daily activities (`day_number` 1–20) linked to a plan |
+| `activity_progress` | Tracks which activities each coder has completed |
+| `evidence_submissions` | Files and links submitted as proof of work |
+| `ai_generation_log` | Audit log of every AI generation call |

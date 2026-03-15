@@ -1,0 +1,232 @@
+---
+title: "Exercise generation"
+description: "Generate personalised coding exercises for a plan day and record coder submissions for TL review."
+---
+
+<Note>
+  These are **internal endpoints** called by the Node.js gateway. Exercise results are cached in the database — the same `(plan_id, day_number)` pair always returns the same exercise without re-generating it.
+</Note>
+
+## Endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/generate-exercise` | Generate or retrieve a cached coding exercise. |
+| `POST` | `/exercise/{exercise_id}/submit` | Save a coder's code submission for TL review. |
+
+---
+
+## Generate exercise
+
+```http
+POST /generate-exercise
+```
+
+Generates a coding exercise for a specific day in a learning plan, or returns the cached version if the exercise was already generated for that `(plan_id, day_number)` pair.
+
+### Request body
+
+<ParamField body="coder_id" type="number" required>
+  Database ID of the coder. Used to load soft skills (learning style) for personalisation.
+</ParamField>
+
+<ParamField body="plan_id" type="number" required>
+  ID of the active learning plan. Combined with `day_number` to form the cache key.
+</ParamField>
+
+<ParamField body="day_number" type="number" required>
+  Day within the plan (e.g., `1`–`5`). Together with `plan_id`, uniquely identifies the exercise slot.
+</ParamField>
+
+<ParamField body="week_number" type="number" required>
+  Week within the plan. Used for prompt context.
+</ParamField>
+
+<ParamField body="topic" type="string" required>
+  The topic to exercise (e.g., `"INNER JOIN"`, `"CSS Flexbox"`).
+</ParamField>
+
+<ParamField body="description" type="string" default="">
+  Optional description or additional context for the exercise prompt.
+</ParamField>
+
+<ParamField body="difficulty" type="string" default="intermediate">
+  Difficulty level passed to the LLM prompt. Common values: `"beginner"`, `"intermediate"`, `"advanced"`.
+</ParamField>
+
+<ParamField body="module_name" type="string" default="Bases de Datos">
+  Human-readable module name. Used to auto-detect the programming language when `language` is not supplied.
+</ParamField>
+
+<ParamField body="language" type="string">
+  Programming language for the exercise (e.g., `"sql"`, `"python"`, `"javascript"`, `"html"`). When omitted, the service infers the language from `module_name`.
+</ParamField>
+
+### Response
+
+<ResponseField name="success" type="boolean" required>
+  `true` when an exercise was returned (either fresh or cached). `false` when generation failed and a fallback exercise is returned.
+</ResponseField>
+
+<ResponseField name="cached" type="boolean" required>
+  `true` when the exercise was retrieved from the database cache. `false` when it was freshly generated.
+</ResponseField>
+
+<ResponseField name="exercise" type="object">
+  The exercise object.
+  <Expandable title="properties">
+    <ResponseField name="id" type="number">
+      Database ID of the exercise. Present only on freshly generated exercises; omitted on cache hits (the cached record already has an ID).
+    </ResponseField>
+    <ResponseField name="title" type="string">
+      Exercise title.
+    </ResponseField>
+    <ResponseField name="description" type="string">
+      What the coder must accomplish.
+    </ResponseField>
+    <ResponseField name="language" type="string">
+      Detected or provided programming language.
+    </ResponseField>
+    <ResponseField name="difficulty" type="string">
+      Difficulty level.
+    </ResponseField>
+    <ResponseField name="topic" type="string">
+      The topic being practised.
+    </ResponseField>
+    <ResponseField name="starter_code" type="string">
+      Starter code scaffold for the coder.
+    </ResponseField>
+    <ResponseField name="solution" type="string">
+      Reference solution. Not shown to coders; used by TLs.
+    </ResponseField>
+    <ResponseField name="expected_output" type="string">
+      Description of the expected output or result.
+    </ResponseField>
+    <ResponseField name="hints" type="string[]">
+      Hints to help unblocked coders without giving away the solution.
+    </ResponseField>
+    <ResponseField name="status" type="string">
+      `"ok"` for a normal exercise, `"fallback"` if generation failed and a placeholder was returned.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Example
+
+<CodeGroup>
+
+```bash cURL
+curl --request POST \
+  --url http://localhost:8000/generate-exercise \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "coder_id": 42,
+    "plan_id": 188,
+    "day_number": 1,
+    "week_number": 2,
+    "topic": "INNER JOIN",
+    "difficulty": "intermediate",
+    "module_name": "Bases de Datos"
+  }'
+```
+
+</CodeGroup>
+
+**Response (fresh generation)**
+
+```json
+{
+  "success": true,
+  "cached": false,
+  "exercise": {
+    "id": 57,
+    "title": "Sales report using INNER JOIN",
+    "description": "Write a query that lists each product name alongside the total quantity sold, using an INNER JOIN between products and order_items.",
+    "language": "sql",
+    "difficulty": "intermediate",
+    "topic": "INNER JOIN",
+    "starter_code": "SELECT\n  -- your columns here\nFROM products p\nINNER JOIN order_items oi ON p.id = oi.product_id\nGROUP BY p.name;",
+    "solution": "SELECT p.name, SUM(oi.quantity) AS total_sold FROM products p INNER JOIN order_items oi ON p.id = oi.product_id GROUP BY p.name ORDER BY total_sold DESC;",
+    "expected_output": "A result set with columns: name (string), total_sold (integer), ordered from most to least sold.",
+    "hints": [
+      "Use SUM() with GROUP BY to aggregate quantities per product.",
+      "Make sure your ON clause references the correct foreign key."
+    ],
+    "status": "ok"
+  }
+}
+```
+
+---
+
+## Submit exercise
+
+```http
+POST /exercise/{exercise_id}/submit
+```
+
+Saves the coder's code submission against an exercise. Submissions are stored for TL review — there is **no auto-grading**. The TL reviews submissions by querying `exercise_submissions JOIN exercises JOIN users`.
+
+### Path parameters
+
+<ParamField path="exercise_id" type="number" required>
+  ID of the exercise being submitted, as returned by `/generate-exercise`.
+</ParamField>
+
+### Request body
+
+<ParamField body="coder_id" type="number" required>
+  Database ID of the coder submitting the code.
+</ParamField>
+
+<ParamField body="code" type="string" required>
+  The coder's solution code. Must be a non-empty string.
+</ParamField>
+
+### Response
+
+<ResponseField name="success" type="boolean" required>
+  `true` when the submission was saved.
+</ResponseField>
+
+<ResponseField name="submission_id" type="number" required>
+  Database ID of the new `exercise_submissions` record.
+</ResponseField>
+
+<ResponseField name="message" type="string" required>
+  Human-readable confirmation message.
+</ResponseField>
+
+### Example
+
+<CodeGroup>
+
+```bash cURL
+curl --request POST \
+  --url http://localhost:8000/exercise/57/submit \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "coder_id": 42,
+    "code": "SELECT p.name, SUM(oi.quantity) AS total_sold FROM products p INNER JOIN order_items oi ON p.id = oi.product_id GROUP BY p.name ORDER BY total_sold DESC;"
+  }'
+```
+
+</CodeGroup>
+
+**Response**
+
+```json
+{
+  "success": true,
+  "submission_id": 301,
+  "message": "\u00a1Soluci\u00f3n enviada! Tu TL podr\u00e1 revisar tu c\u00f3digo."
+}
+```
+
+### Error responses
+
+| Status | Condition |
+|---|---|
+| `400` | `coder_id` is missing from the request body. |
+| `400` | `code` is empty or whitespace-only. |
+| `500` | Database write failed. |

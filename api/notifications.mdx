@@ -1,0 +1,194 @@
+---
+title: "Notifications"
+description: "Real-time SSE stream and REST endpoints for reading, marking, and deleting notifications. Supports both coders and TLs."
+---
+
+<Note>
+  All `/api/notifications/*` endpoints require an authenticated session. Both `coder` and `tl` roles can access these endpoints.
+</Note>
+
+## Overview
+
+Kairo uses a dual notification delivery model:
+
+| Channel | Endpoint | Use case |
+|---|---|---|
+| Server-Sent Events (SSE) | `GET /api/notifications/stream` | Live badge updates, real-time bell ring |
+| REST | `GET /api/notifications` | Initial page load, polling fallback |
+
+Notifications are stored in the `notifications` table and created by server-side services (feedback, assignment creation, plan events, etc.).
+
+---
+
+## SSE stream
+
+**`GET /api/notifications/stream`** — requires authentication
+
+Opens a persistent Server-Sent Events connection. The server immediately sends a `CONNECTED` event to confirm the stream is live. Subsequent events are pushed whenever a new notification is created for the user.
+
+<Warning>
+  This is a long-lived HTTP connection. Configure your reverse proxy (nginx, Railway) with `X-Accel-Buffering: no` to prevent response buffering. The server sets this header automatically.
+</Warning>
+
+### SSE event format
+
+Each event is a JSON object sent on the `data:` field:
+
+```
+data: {"type":"CONNECTED"}
+
+data: {"type":"notification","id":99,"title":"Nuevo Feedback","message":"...","is_read":false}
+```
+
+### Response headers
+
+| Header | Value |
+|---|---|
+| `Content-Type` | `text/event-stream` |
+| `Cache-Control` | `no-cache` |
+| `Connection` | `keep-alive` |
+| `X-Accel-Buffering` | `no` |
+
+<CodeGroup>
+
+```bash cURL
+curl -N http://localhost:3000/api/notifications/stream \
+  -b cookies.txt \
+  -H "Accept: text/event-stream"
+```
+
+```javascript Browser EventSource
+const stream = new EventSource(
+  'http://localhost:3000/api/notifications/stream',
+  { withCredentials: true }
+);
+
+stream.onmessage = (event) => {
+  const data = JSON.parse(event.data);
+  if (data.type === 'notification') {
+    updateBellBadge(data);
+  }
+};
+```
+
+</CodeGroup>
+
+---
+
+## Get notifications
+
+**`GET /api/notifications`** — requires authentication
+
+Returns the 30 most recent notifications for the authenticated user, ordered by creation time descending.
+
+### Response
+
+<ResponseField name="notifications" type="object[]">
+  <Expandable title="item properties">
+    <ResponseField name="id" type="number">Notification ID.</ResponseField>
+    <ResponseField name="title" type="string">Short notification title.</ResponseField>
+    <ResponseField name="message" type="string">Full notification message.</ResponseField>
+    <ResponseField name="type" type="string">Event type, e.g. `feedback`, `assignment`, `feedback_read`.</ResponseField>
+    <ResponseField name="is_read" type="boolean">`false` for unread notifications.</ResponseField>
+    <ResponseField name="related_id" type="number">ID of the related entity (feedback ID, assignment ID, etc.).</ResponseField>
+    <ResponseField name="created_at" type="string">ISO 8601 creation timestamp.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="unread" type="number">
+  Count of notifications where `is_read = false`. Use this to drive the bell badge counter.
+</ResponseField>
+
+<CodeGroup>
+
+```bash cURL
+curl http://localhost:3000/api/notifications \
+  -b cookies.txt
+```
+
+</CodeGroup>
+
+**200 OK**
+
+```json
+{
+  "notifications": [
+    {
+      "id": 99,
+      "title": "Nuevo Feedback Requerido",
+      "message": "Tu TL Ana García te ha dejado un feedback: \"Revisa los patrones de diseño...\"",
+      "type": "feedback",
+      "is_read": false,
+      "related_id": 88,
+      "created_at": "2026-03-15T12:00:00.000Z"
+    }
+  ],
+  "unread": 1
+}
+```
+
+---
+
+## Mark all as read
+
+**`POST /api/notifications/read`** — requires authentication
+
+Sets `is_read = true` on all unread notifications for the current user. Use this when the user opens the notification panel.
+
+### Response
+
+<ResponseField name="success" type="boolean">`true` on success.</ResponseField>
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST http://localhost:3000/api/notifications/read \
+  -b cookies.txt
+```
+
+</CodeGroup>
+
+**200 OK**
+
+```json
+{ "success": true }
+```
+
+---
+
+## Delete notification
+
+**`DELETE /api/notifications/:id`** — requires authentication
+
+Permanently deletes a single notification. The notification must belong to the authenticated user.
+
+### Path parameters
+
+<ParamField path="id" type="number" required>
+  Notification ID to delete.
+</ParamField>
+
+### Response
+
+<ResponseField name="success" type="boolean">`true` when the notification was deleted.</ResponseField>
+
+<CodeGroup>
+
+```bash cURL
+curl -X DELETE http://localhost:3000/api/notifications/99 \
+  -b cookies.txt
+```
+
+</CodeGroup>
+
+**200 OK**
+
+```json
+{ "success": true }
+```
+
+**404 Not Found** — notification not found or belongs to a different user.
+
+```json
+{ "error": "Notification not found" }
+```

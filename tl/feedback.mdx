@@ -1,0 +1,118 @@
+---
+title: "Sending feedback"
+description: "Send structured, real-time feedback to coders in your clan — delivered instantly via Supabase Realtime."
+---
+
+Feedback is the primary communication channel between Team Leaders and coders in Kairo. Every message you send is inserted into the `tl_feedback` table and pushed to the coder's bell notification in real time via Supabase Realtime.
+
+## The `tl_feedback` table
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `coder_id` | `INT` | The recipient coder |
+| `tl_id` | `INT` | Your TL user ID (set automatically from the session) |
+| `plan_id` | `INT` (nullable) | Optional link to a specific `complementary_plans` record |
+| `feedback_text` | `TEXT` | The message body |
+| `feedback_type` | `feedback_type_enum` | `weekly`, `activity`, or `general` |
+| `is_read` | `BOOLEAN` | `false` on creation; set to `true` when the coder opens the notification |
+| `created_at` | `TIMESTAMP` | Set automatically to `NOW()` |
+
+## Feedback types
+
+<Tabs>
+  <Tab title="weekly">
+    **Weekly check-in feedback** — used to summarise a coder's performance at the end of the week. Cover progress, highlights, and what to focus on in the coming week. This is the most structured feedback type and should reference `current_week` and `average_score` from `moodle_progress`.
+  </Tab>
+  <Tab title="activity">
+    **Activity-specific feedback** — tied to a particular exercise or complementary plan activity. Use this when you review a coder's submission in the exercise review modal. The `plan_id` foreign key can link this feedback directly to the relevant `complementary_plans` record.
+  </Tab>
+  <Tab title="general">
+    **General mentorship feedback** — open-ended messages for encouragement, soft-skill coaching, or any topic that does not fit the weekly or activity categories.
+  </Tab>
+</Tabs>
+
+## How to send feedback
+
+<Steps>
+  <Step title="Select a coder">
+    In the dashboard, click a coder's row to open the detail side panel.
+  </Step>
+  <Step title="Choose a feedback type">
+    Use the dropdown in the **Feedback** section of the side panel. Select `weekly`, `activity`, or `general`.
+  </Step>
+  <Step title="Write your message">
+    Type your message in the text area. Kairo sanitises the input before inserting it into `tl_feedback`.
+  </Step>
+  <Step title="Send">
+    Click **Send**. The backend calls `POST /api/tl/feedback` with `{ coderId, feedbackText, feedbackType }`. A record is inserted and a Supabase Realtime event is dispatched to the coder's frontend.
+  </Step>
+</Steps>
+
+## Real-time delivery
+
+Kairo uses Supabase Realtime to push feedback notifications without requiring the coder to reload the page:
+
+1. `POST /api/tl/feedback` inserts the record with `is_read = false`.
+2. Supabase broadcasts the insert event to the coder's active session.
+3. The coder's bell icon displays a **red dot** (`notif-dot` element becomes visible).
+4. The coder opens the notification dropdown and reads the message.
+5. The frontend calls `UPDATE tl_feedback SET is_read = true` for the read record.
+6. The red dot disappears.
+
+```
+TL sends feedback
+      │
+      ▼
+INSERT tl_feedback (is_read = false)
+      │
+      ▼
+Supabase Realtime → coder's browser
+      │
+      ▼
+Red dot 🔴 appears on bell
+      │
+      ▼  (coder clicks bell and reads)
+      ▼
+UPDATE is_read = true
+      │
+      ▼
+Red dot disappears ✅
+```
+
+## Feedback via the exercise review modal
+
+You can also send feedback directly when reviewing a coder's exercise submission:
+
+<Steps>
+  <Step title="Find a submission">
+    Scroll to **Exercises submitted by the clan** on the dashboard. Click **Review** on any submission.
+  </Step>
+  <Step title="Read the code">
+    The modal shows the submitted code alongside the expected output for the exercise.
+  </Step>
+  <Step title="Write and send feedback">
+    Type your feedback in the modal's text area and click **Send feedback**. This calls `POST /api/tl/submissions/:id/review` which saves `tl_feedback_text` on the `exercise_submissions` record, awards the coder **+15 Kairo points**, and sends a real-time notification.
+  </Step>
+</Steps>
+
+<Info>
+  Submission feedback is stored in `exercise_submissions.tl_feedback_text`, not in the `tl_feedback` table. The `tl_feedback` table is for general and weekly messages sent from the side panel.
+</Info>
+
+## Best practices
+
+<Tip>
+  Be specific about what you observed. Instead of "good work", write "Your JOIN query in exercise 4 was well-structured — using a LEFT JOIN here was the right call."
+</Tip>
+
+<Tip>
+  For weekly feedback, lead with one strength and one improvement area. Reference the coder's actual `average_score` and `current_week` to make the message feel personal and data-grounded.
+</Tip>
+
+<Tip>
+  Use `activity` feedback immediately after a coder submits an exercise. Timely feedback is more actionable than messages sent days later.
+</Tip>
+
+<Tip>
+  When a coder has a `high` risk flag, pair your feedback with a concrete next step — for example, recommending a specific card from their `complementary_plans` with `priority_level = 'high'`.
+</Tip>

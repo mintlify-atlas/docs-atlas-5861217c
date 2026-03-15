@@ -1,0 +1,503 @@
+---
+title: "Authentication"
+description: "Session-based authentication endpoints including registration, login, OTP verification, and social OAuth flows."
+---
+
+<Warning>
+  CORS is enforced against `FRONTEND_URL`. The origin of every request must match this value exactly, or it will be blocked with a CORS error. Credentials (cookies) must be sent with every authenticated request.
+</Warning>
+
+<Note>
+  Kairo uses **cookie-based sessions** (express-session). The session cookie is named `riwi.sid`. All authenticated endpoints require this cookie to be present and valid. Sessions expire after **24 hours**.
+</Note>
+
+## Rate limiting
+
+| Limiter | Window | Max requests |
+|---|---|---|
+| `authLimiter` | 15 minutes | 20 requests per IP |
+| `otpLimiter` | 10 minutes | 5 OTP attempts per IP |
+
+Auth routes (`/api/auth/*`) are subject to the `authLimiter`. OTP-specific routes additionally apply the `otpLimiter`.
+
+---
+
+## Register
+
+<Note>Registering creates the user record and immediately sends a one-time verification code to the provided email. The account cannot log in until OTP verification is complete.</Note>
+
+**`POST /api/auth/register`**
+
+### Request body
+
+<ParamField body="email" type="string" required>
+  The user's email address. Must be unique among verified accounts.
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  Plain-text password. Stored as a bcrypt hash (salt rounds: 12).
+</ParamField>
+
+<ParamField body="fullName" type="string" required>
+  The user's display name, used in emails and the UI.
+</ParamField>
+
+<ParamField body="role" type="string" default="coder">
+  User role. Accepted values: `coder`, `tl`.
+</ParamField>
+
+<ParamField body="clanId" type="string">
+  Optional clan identifier to associate the user with on registration.
+</ParamField>
+
+### Response
+
+<ResponseField name="message" type="string">
+  Confirmation that the verification code was sent.
+</ResponseField>
+
+<ResponseField name="email" type="string">
+  The email address the OTP was sent to.
+</ResponseField>
+
+<ResponseField name="ttl" type="number">
+  OTP validity duration in seconds (900 = 15 minutes).
+</ResponseField>
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST http://localhost:3000/api/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "alice@example.com",
+    "password": "supersecret",
+    "fullName": "Alice Smith",
+    "role": "coder",
+    "clanId": "clan-42"
+  }'
+```
+
+</CodeGroup>
+
+**201 Created**
+
+```json
+{
+  "message": "Verification code sent.",
+  "email": "alice@example.com",
+  "ttl": 900
+}
+```
+
+**409 Conflict** — email already registered and verified.
+
+---
+
+## Verify OTP
+
+**`POST /api/auth/verify-otp`**
+
+Verifies the one-time code sent during registration (or after a failed login on an unverified account). On success, a session is created and `riwi.sid` is set as a cookie.
+
+### Request body
+
+<ParamField body="email" type="string" required>
+  Email address that was registered.
+</ParamField>
+
+<ParamField body="code" type="string" required>
+  Six-digit OTP received by email.
+</ParamField>
+
+### Response
+
+<ResponseField name="success" type="boolean">
+  `true` when verification succeeds.
+</ResponseField>
+
+<ResponseField name="user" type="object">
+  <Expandable title="properties">
+    <ResponseField name="id" type="number">
+      Unique user ID.
+    </ResponseField>
+    <ResponseField name="fullName" type="string">
+      User's display name.
+    </ResponseField>
+    <ResponseField name="role" type="string">
+      `coder` or `tl`.
+    </ResponseField>
+    <ResponseField name="clanId" type="string">
+      Clan identifier, or `null` if not assigned.
+    </ResponseField>
+    <ResponseField name="firstLogin" type="boolean">
+      `true` if the user has not completed onboarding yet.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST http://localhost:3000/api/auth/verify-otp \
+  -H "Content-Type: application/json" \
+  -c cookies.txt \
+  -d '{"email": "alice@example.com", "code": "482910"}'
+```
+
+</CodeGroup>
+
+**200 OK**
+
+```json
+{
+  "success": true,
+  "user": {
+    "id": 7,
+    "fullName": "Alice Smith",
+    "role": "coder",
+    "clanId": "clan-42",
+    "firstLogin": true
+  }
+}
+```
+
+**400 Bad Request** — invalid or expired code.
+
+---
+
+## Resend OTP
+
+**`POST /api/auth/resend-otp`**
+
+Invalidates any pending OTP for the given email and sends a fresh code.
+
+### Request body
+
+<ParamField body="email" type="string" required>
+  Email address to resend the code to. The account must exist and not yet be verified.
+</ParamField>
+
+### Response
+
+<ResponseField name="success" type="boolean">
+  `true` when the new code was sent.
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  Human-readable confirmation.
+</ResponseField>
+
+<ResponseField name="ttl" type="number">
+  New OTP validity in seconds.
+</ResponseField>
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST http://localhost:3000/api/auth/resend-otp \
+  -H "Content-Type: application/json" \
+  -d '{"email": "alice@example.com"}'
+```
+
+</CodeGroup>
+
+**200 OK**
+
+```json
+{
+  "success": true,
+  "message": "A new verification code has been sent.",
+  "ttl": 900
+}
+```
+
+**404 Not Found** — user does not exist.
+
+**400 Bad Request** — email already verified.
+
+---
+
+## Login
+
+**`POST /api/auth/login`**
+
+Authenticates with email and password. If the account has not completed OTP verification, a new code is sent and a `403` is returned.
+
+<Note>
+  OAuth accounts (GitHub/Google) cannot log in with this endpoint. Attempting to do so returns `401 Invalid credentials`.
+</Note>
+
+### Request body
+
+<ParamField body="email" type="string" required>
+  Registered email address.
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  Account password.
+</ParamField>
+
+### Response
+
+<ResponseField name="success" type="boolean">
+  `true` on successful login.
+</ResponseField>
+
+<ResponseField name="user" type="object">
+  <Expandable title="properties">
+    <ResponseField name="id" type="number">User ID.</ResponseField>
+    <ResponseField name="fullName" type="string">Display name.</ResponseField>
+    <ResponseField name="role" type="string">`coder` or `tl`.</ResponseField>
+    <ResponseField name="clanId" type="string">Clan ID or `null`.</ResponseField>
+    <ResponseField name="firstLogin" type="boolean">Onboarding status.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST http://localhost:3000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -c cookies.txt \
+  -d '{"email": "alice@example.com", "password": "supersecret"}'
+```
+
+</CodeGroup>
+
+**200 OK**
+
+```json
+{
+  "success": true,
+  "user": {
+    "id": 7,
+    "fullName": "Alice Smith",
+    "role": "coder",
+    "clanId": "clan-42",
+    "firstLogin": false
+  }
+}
+```
+
+**401 Unauthorized** — wrong credentials.
+
+**403 Forbidden** — email not yet verified; a new OTP has been sent.
+
+```json
+{
+  "requiresOtp": true,
+  "error": "Please verify your email first.",
+  "email": "alice@example.com"
+}
+```
+
+---
+
+## Check session
+
+**`GET /api/auth/check`** — public (no auth required)
+
+**`GET /api/auth/me`** — requires authentication
+
+Both endpoints return the currently authenticated user from the active session. `/check` uses the session cookie or Passport user object; `/me` requires a valid session.
+
+### Response
+
+<ResponseField name="authenticated" type="boolean">
+  `true` when a valid session exists.
+</ResponseField>
+
+<ResponseField name="user" type="object">
+  <Expandable title="properties">
+    <ResponseField name="id" type="number">User ID.</ResponseField>
+    <ResponseField name="email" type="string">Email address.</ResponseField>
+    <ResponseField name="fullName" type="string">Display name.</ResponseField>
+    <ResponseField name="role" type="string">`coder` or `tl`.</ResponseField>
+    <ResponseField name="clanId" type="string">Clan ID or `null`.</ResponseField>
+    <ResponseField name="firstLogin" type="boolean">Onboarding status.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<CodeGroup>
+
+```bash cURL (check)
+curl http://localhost:3000/api/auth/check \
+  -b cookies.txt
+```
+
+```bash cURL (me)
+curl http://localhost:3000/api/auth/me \
+  -b cookies.txt
+```
+
+</CodeGroup>
+
+**200 OK**
+
+```json
+{
+  "authenticated": true,
+  "user": {
+    "id": 7,
+    "email": "alice@example.com",
+    "fullName": "Alice Smith",
+    "role": "coder",
+    "clanId": "clan-42",
+    "firstLogin": false
+  }
+}
+```
+
+**401 Unauthorized** — `{ "authenticated": false }`
+
+---
+
+## Logout
+
+**`POST /api/auth/logout`** — requires authentication
+
+Destroys the server-side session and clears the `riwi.sid` cookie.
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST http://localhost:3000/api/auth/logout \
+  -b cookies.txt
+```
+
+</CodeGroup>
+
+**200 OK**
+
+```json
+{ "message": "Session closed." }
+```
+
+---
+
+## Update profile (auth)
+
+**`PATCH /api/auth/profile`** — requires authentication
+
+Updates `full_name` and/or `clan` for the currently authenticated user. At least one field must be provided.
+
+### Request body
+
+<ParamField body="fullName" type="string">
+  New display name.
+</ParamField>
+
+<ParamField body="clanId" type="string">
+  New clan identifier.
+</ParamField>
+
+### Response
+
+<ResponseField name="success" type="boolean">`true` on update.</ResponseField>
+
+<ResponseField name="user" type="object">
+  <Expandable title="properties">
+    <ResponseField name="id" type="number">User ID.</ResponseField>
+    <ResponseField name="email" type="string">Email address.</ResponseField>
+    <ResponseField name="fullName" type="string">Updated display name.</ResponseField>
+    <ResponseField name="role" type="string">User role.</ResponseField>
+    <ResponseField name="clanId" type="string">Updated clan ID.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<CodeGroup>
+
+```bash cURL
+curl -X PATCH http://localhost:3000/api/auth/profile \
+  -H "Content-Type: application/json" \
+  -b cookies.txt \
+  -d '{"fullName": "Alice M. Smith", "clanId": "clan-99"}'
+```
+
+</CodeGroup>
+
+---
+
+## Complete onboarding
+
+**`PATCH /api/auth/complete-onboarding`** — requires authentication, role: `coder`
+
+Marks the coder's `first_login` flag as `false` and assigns a clan. Called once after the onboarding diagnostic is submitted.
+
+### Request body
+
+<ParamField body="clanId" type="string">
+  Clan to assign to the coder. Optional — can be `null`.
+</ParamField>
+
+<CodeGroup>
+
+```bash cURL
+curl -X PATCH http://localhost:3000/api/auth/complete-onboarding \
+  -H "Content-Type: application/json" \
+  -b cookies.txt \
+  -d '{"clanId": "clan-42"}'
+```
+
+</CodeGroup>
+
+**200 OK**
+
+```json
+{ "success": true, "message": "Onboarding completed." }
+```
+
+---
+
+## Google OAuth
+
+### Initiate
+
+**`GET /api/auth/google`**
+
+Redirects the user to Google's consent screen. Scopes requested: `profile`, `email`. The `prompt=select_account` parameter always shows the account picker.
+
+### Callback
+
+**`GET /api/auth/google/callback`**
+
+Google redirects here after authorization. On success, the user is logged in and redirected to the dashboard (or onboarding if `first_login = true`). On failure, the browser is redirected to `FRONTEND_URL/login.html?error=google_failed`.
+
+<CodeGroup>
+
+```bash Initiate flow
+# Open this URL in a browser — not callable with curl directly
+curl -L http://localhost:3000/api/auth/google
+```
+
+</CodeGroup>
+
+---
+
+## GitHub OAuth
+
+### Initiate
+
+**`GET /api/auth/github`**
+
+Redirects the user to GitHub's authorization page. Scope requested: `user:email`.
+
+### Callback
+
+**`GET /api/auth/github/callback`**
+
+GitHub redirects here after authorization. On success, session is established and the user is redirected to the dashboard or onboarding. On failure, redirected to `FRONTEND_URL/login.html?error=github_failed`.
+
+<CodeGroup>
+
+```bash Initiate flow
+# Open this URL in a browser — not callable with curl directly
+curl -L http://localhost:3000/api/auth/github
+```
+
+</CodeGroup>
+
+<Note>
+  Social auth sessions set `otp_verified = true` automatically. Users registered via OAuth cannot use the password login endpoint.
+</Note>

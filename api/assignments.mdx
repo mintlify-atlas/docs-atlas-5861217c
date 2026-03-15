@@ -1,0 +1,266 @@
+---
+title: "Assignments"
+description: "Endpoints for TLs to create and manage assignments, and for coders to list and download them. PDF uploads are stored in Supabase Storage."
+---
+
+<Note>
+  Assignment routes are mounted directly under `/api` (not under a role prefix). Role authorization is applied per route: TL endpoints require `role: tl`, coder endpoints require `role: coder`. All routes require an authenticated session.
+</Note>
+
+## PDF upload limits
+
+- Max file size: **20 MB**
+- Accepted MIME type: `application/pdf` only
+- Storage: Supabase Storage bucket `assignment-files`
+
+---
+
+## Create assignment (TL)
+
+**`POST /api/tl/assignment`** — requires authentication, role: `tl`
+
+Creates a new assignment and notifies all relevant coders via real-time notifications. Accepts either a PDF file or a repository URL.
+
+### Request body (multipart/form-data)
+
+<ParamField body="title" type="string" required>
+  Assignment title shown to coders.
+</ParamField>
+
+<ParamField body="contentType" type="string" required>
+  `pdf` or `repo`. Determines whether a file or `repoUrl` is expected.
+</ParamField>
+
+<ParamField body="scope" type="string" required>
+  `clan` to restrict to the TL's clan, or `all` to assign to every active coder.
+</ParamField>
+
+<ParamField body="moduleId" type="number">
+  Optional module ID to associate the assignment with.
+</ParamField>
+
+<ParamField body="deadline" type="string">
+  Optional ISO 8601 deadline date/time.
+</ParamField>
+
+<ParamField body="repoUrl" type="string">
+  Required when `contentType` is `repo`. GitHub or other repository URL.
+</ParamField>
+
+<ParamField body="file" type="file">
+  Required when `contentType` is `pdf`. Must be `application/pdf`, max 20 MB.
+</ParamField>
+
+### Response
+
+<ResponseField name="success" type="boolean">`true` on success.</ResponseField>
+<ResponseField name="assignmentId" type="number">ID of the newly created assignment.</ResponseField>
+<ResponseField name="notified" type="number">Number of coders who received a notification.</ResponseField>
+
+<CodeGroup>
+
+```bash cURL (PDF)
+curl -X POST http://localhost:3000/api/tl/assignment \
+  -b cookies.txt \
+  -F "title=Week 4 Challenge" \
+  -F "contentType=pdf" \
+  -F "scope=clan" \
+  -F "moduleId=4" \
+  -F "deadline=2026-04-01T23:59:00Z" \
+  -F "file=@/path/to/assignment.pdf"
+```
+
+```bash cURL (repo)
+curl -X POST http://localhost:3000/api/tl/assignment \
+  -H "Content-Type: application/json" \
+  -b cookies.txt \
+  -d '{
+    "title": "Build a REST API",
+    "contentType": "repo",
+    "scope": "all",
+    "repoUrl": "https://github.com/org/challenge-repo"
+  }'
+```
+
+</CodeGroup>
+
+**200 OK**
+
+```json
+{
+  "success": true,
+  "assignmentId": 42,
+  "notified": 18
+}
+```
+
+**400 Bad Request** — missing required fields, or `contentType` is `pdf` but no file attached.
+
+---
+
+## List assignments (TL)
+
+**`GET /api/tl/assignments`** — requires authentication, role: `tl`
+
+Returns all active assignments created by the authenticated TL, with module names joined.
+
+### Response
+
+<ResponseField name="assignments" type="object[]">
+  Each item includes `id`, `title`, `scope`, `content_type`, `repo_url`, `file_name`, `deadline`, `module_name`, `created_at`, and `clan`.
+</ResponseField>
+
+<CodeGroup>
+
+```bash cURL
+curl http://localhost:3000/api/tl/assignments \
+  -b cookies.txt
+```
+
+</CodeGroup>
+
+---
+
+## Delete assignment (TL)
+
+**`DELETE /api/tl/assignment/:id`** — requires authentication, role: `tl`
+
+Soft-deletes an assignment by setting `is_active = false`. Only the TL who created the assignment can delete it.
+
+### Path parameters
+
+<ParamField path="id" type="number" required>
+  Assignment ID to delete.
+</ParamField>
+
+### Response
+
+<ResponseField name="success" type="boolean">`true` on success.</ResponseField>
+
+<CodeGroup>
+
+```bash cURL
+curl -X DELETE http://localhost:3000/api/tl/assignment/42 \
+  -b cookies.txt
+```
+
+</CodeGroup>
+
+**404 Not Found** — assignment not found or the TL does not own it.
+
+---
+
+## List assignments (coder)
+
+**`GET /api/coder/assignments`** — requires authentication, role: `coder`
+
+Returns all active assignments visible to the coder — those scoped to `all` or to the coder's own clan.
+
+### Response
+
+<ResponseField name="assignments" type="object[]">
+  Each item includes `id`, `title`, `scope`, `content_type`, `repo_url`, `file_name`, `deadline`, `module_name`, `tl_name`, and `created_at`.
+</ResponseField>
+
+<CodeGroup>
+
+```bash cURL
+curl http://localhost:3000/api/coder/assignments \
+  -b cookies.txt
+```
+
+</CodeGroup>
+
+---
+
+## Download assignment PDF (coder)
+
+**`GET /api/coder/assignment/:id/download`** — requires authentication, role: `coder`
+
+Generates a signed Supabase Storage URL valid for **1 hour** to download the assignment PDF. Only works for assignments with `content_type = pdf`.
+
+### Path parameters
+
+<ParamField path="id" type="number" required>
+  Assignment ID.
+</ParamField>
+
+### Response
+
+<ResponseField name="url" type="string">
+  Signed download URL (expires in 3600 seconds).
+</ResponseField>
+
+<ResponseField name="fileName" type="string">
+  Original file name for use as a download hint.
+</ResponseField>
+
+<CodeGroup>
+
+```bash cURL
+curl http://localhost:3000/api/coder/assignment/42/download \
+  -b cookies.txt
+```
+
+</CodeGroup>
+
+**200 OK**
+
+```json
+{
+  "url": "https://your-project.supabase.co/storage/v1/object/sign/assignment-files/clan-42/module-4/...",
+  "fileName": "week4-challenge.pdf"
+}
+```
+
+**400 Bad Request** — assignment does not have an attached PDF.
+
+**404 Not Found** — assignment not found or not accessible to this coder.
+
+---
+
+## Get notifications (assignments context)
+
+**`GET /api/notifications`** — requires authentication
+
+Returns the 30 most recent notifications for the authenticated user (TL or coder), with an unread count.
+
+### Response
+
+<ResponseField name="notifications" type="object[]">
+  Ordered by `created_at` descending. Each item includes all columns from the `notifications` table.
+</ResponseField>
+
+<ResponseField name="unread" type="number">
+  Count of notifications where `is_read = false`.
+</ResponseField>
+
+<CodeGroup>
+
+```bash cURL
+curl http://localhost:3000/api/notifications \
+  -b cookies.txt
+```
+
+</CodeGroup>
+
+---
+
+## Mark notifications as read (assignments context)
+
+**`POST /api/notifications/read`** — requires authentication
+
+Marks all unread notifications for the authenticated user as read.
+
+### Response
+
+<ResponseField name="success" type="boolean">`true` on success.</ResponseField>
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST http://localhost:3000/api/notifications/read \
+  -b cookies.txt
+```
+
+</CodeGroup>

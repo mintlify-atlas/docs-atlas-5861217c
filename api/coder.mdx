@@ -1,0 +1,460 @@
+---
+title: "Coder endpoints"
+description: "Dashboard, learning plans, exercises, resources, activities, and feedback endpoints for coder-role users."
+---
+
+<Note>
+  All `/api/coder/*` endpoints require an authenticated session with role `coder`. Requests without a valid `riwi.sid` cookie return `401`. Coders who have not completed onboarding (`firstLogin: true`) are blocked by the `checkOnboarding` middleware.
+</Note>
+
+---
+
+## Dashboard
+
+**`GET /api/coder/dashboard`**
+
+Returns a consolidated snapshot of everything the coder dashboard needs in a single call: user profile, soft skills assessment, Moodle progress, active AI plan, TL feedback, risk flags, and recent performance tests.
+
+### Response
+
+<ResponseField name="user" type="object">
+  <Expandable title="properties">
+    <ResponseField name="fullName" type="string">Display name.</ResponseField>
+    <ResponseField name="email" type="string">Email address.</ResponseField>
+    <ResponseField name="clanId" type="string">Clan identifier.</ResponseField>
+    <ResponseField name="role" type="string">`coder`.</ResponseField>
+    <ResponseField name="kairoScore" type="number">Gamification score (default 50).</ResponseField>
+    <ResponseField name="moduleId" type="number">Current module ID.</ResponseField>
+    <ResponseField name="moduleName" type="string">Current module name.</ResponseField>
+    <ResponseField name="moduleTotalWeeks" type="number">Total weeks in the module.</ResponseField>
+    <ResponseField name="isModuleCritical" type="boolean">Whether the module is flagged as critical.</ResponseField>
+    <ResponseField name="learningStyleCache" type="string">Cached VARK learning style.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="softSkills" type="object">
+  <Expandable title="properties">
+    <ResponseField name="autonomy" type="number">Score 1–5.</ResponseField>
+    <ResponseField name="timeManagement" type="number">Score 1–5.</ResponseField>
+    <ResponseField name="problemSolving" type="number">Score 1–5.</ResponseField>
+    <ResponseField name="communication" type="number">Score 1–5.</ResponseField>
+    <ResponseField name="teamwork" type="number">Score 1–5.</ResponseField>
+    <ResponseField name="learningStyle" type="string">VARK dominant style.</ResponseField>
+    <ResponseField name="average" type="number">Mean across all five skills.</ResponseField>
+    <ResponseField name="assessedAt" type="string">ISO 8601 timestamp.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="progress" type="object">
+  <Expandable title="properties">
+    <ResponseField name="currentWeek" type="number">Current Moodle week (default 1 for new coders).</ResponseField>
+    <ResponseField name="averageScore" type="number">Moodle average score, or `null` if no data yet.</ResponseField>
+    <ResponseField name="strugglingTopics" type="string[]">Topics where the coder is underperforming.</ResponseField>
+    <ResponseField name="weeksCompleted" type="object[]">Array of completed week records.</ResponseField>
+    <ResponseField name="weeksCompletedCount" type="number">Count of completed weeks.</ResponseField>
+    <ResponseField name="updatedAt" type="string">Last Moodle sync timestamp.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="activePlan" type="object">
+  <Expandable title="properties">
+    <ResponseField name="id" type="number">Plan ID.</ResponseField>
+    <ResponseField name="targetedSoftSkill" type="string">Soft skill the plan focuses on.</ResponseField>
+    <ResponseField name="planType" type="string">Plan generation type (e.g. `interpretive`).</ResponseField>
+    <ResponseField name="generatedAt" type="string">ISO 8601 timestamp.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="notifications" type="object">
+  <Expandable title="properties">
+    <ResponseField name="unread" type="number">Count of unread feedback messages.</ResponseField>
+    <ResponseField name="items" type="object[]">Last 5 TL feedback items.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="riskFlags" type="object[]">
+  Up to 3 unresolved risk flags with `level`, `reason`, and `detectedAt`.
+</ResponseField>
+
+<ResponseField name="performanceTests" type="object[]">
+  Last 3 performance test results with `score`, `status`, `moduleName`, and `takenAt`.
+</ResponseField>
+
+<CodeGroup>
+
+```bash cURL
+curl http://localhost:3000/api/coder/dashboard \
+  -b cookies.txt
+```
+
+</CodeGroup>
+
+---
+
+## Get active plan
+
+**`GET /api/coder/plan`**
+
+Returns the coder's currently active AI-generated complementary plan, including completed days and the next pending day.
+
+### Response
+
+<ResponseField name="hasPlan" type="boolean">
+  `false` when no active plan exists.
+</ResponseField>
+
+<ResponseField name="plan" type="object">
+  <Expandable title="properties">
+    <ResponseField name="id" type="number">Plan ID.</ResponseField>
+    <ResponseField name="moduleId" type="number">Module this plan belongs to.</ResponseField>
+    <ResponseField name="planContent" type="object">Full AI-generated plan content.</ResponseField>
+    <ResponseField name="targetedSoftSkill" type="string">Focus skill.</ResponseField>
+    <ResponseField name="completedDays" type="object">Map of day number → completion timestamp.</ResponseField>
+    <ResponseField name="currentDay" type="number">Next uncompleted day (1–20).</ResponseField>
+    <ResponseField name="completedCount" type="number">Total days completed.</ResponseField>
+    <ResponseField name="isComplete" type="boolean">`true` when all 20 days are done.</ResponseField>
+    <ResponseField name="generatedAt" type="string">ISO 8601 timestamp.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<CodeGroup>
+
+```bash cURL
+curl http://localhost:3000/api/coder/plan \
+  -b cookies.txt
+```
+
+</CodeGroup>
+
+---
+
+## Request a new plan
+
+**`POST /api/coder/plan/request`**
+
+Asks the Python AI microservice to generate a new complementary plan. The response is immediate — plan generation runs in the background. Poll `GET /api/coder/plan` to check when the plan is ready.
+
+### Request body
+
+<ParamField body="plan_type" type="string" default="interpretive">
+  Type of plan to generate. Currently supported: `interpretive`.
+</ParamField>
+
+<ParamField body="current_week" type="number" default="1">
+  The coder's current Moodle week, used to calibrate plan difficulty.
+</ParamField>
+
+### Response
+
+<ResponseField name="requested" type="boolean">`true` when the request was forwarded to the AI service.</ResponseField>
+
+<ResponseField name="message" type="string">Informational message for the UI.</ResponseField>
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST http://localhost:3000/api/coder/plan/request \
+  -H "Content-Type: application/json" \
+  -b cookies.txt \
+  -d '{"plan_type": "interpretive", "current_week": 3}'
+```
+
+</CodeGroup>
+
+**200 OK**
+
+```json
+{
+  "requested": true,
+  "message": "Plan en generación. Reintenta en unos segundos."
+}
+```
+
+---
+
+## Complete a plan day
+
+**`POST /api/coder/plan/:planId/day/:day/complete`**
+
+Marks a specific day of an active plan as completed. Awards Kairo points for every day completed, and a bonus when all 20 days are finished.
+
+### Path parameters
+
+<ParamField path="planId" type="number" required>
+  ID of the complementary plan.
+</ParamField>
+
+<ParamField path="day" type="number" required>
+  Day number to complete. Must be between `1` and `20`.
+</ParamField>
+
+### Response
+
+<ResponseField name="success" type="boolean">`true` on success.</ResponseField>
+<ResponseField name="completedDays" type="object">Updated map of completed days.</ResponseField>
+<ResponseField name="completedCount" type="number">Total completed days after this action.</ResponseField>
+<ResponseField name="nextDay" type="number">Next uncompleted day, or `null` if the plan is finished.</ResponseField>
+<ResponseField name="isComplete" type="boolean">`true` when all 20 days are done.</ResponseField>
+<ResponseField name="kairoScore" type="number">Updated Kairo score after awarding points.</ResponseField>
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST http://localhost:3000/api/coder/plan/14/day/3/complete \
+  -b cookies.txt
+```
+
+</CodeGroup>
+
+**400 Bad Request** — day out of range.
+
+**404 Not Found** — plan not found or not active.
+
+---
+
+## Get plan details
+
+**`GET /api/coder/plans/:planId`**
+
+Returns the full plan record including all associated `plan_activities`.
+
+### Path parameters
+
+<ParamField path="planId" type="number" required>
+  Plan ID.
+</ParamField>
+
+### Response
+
+<ResponseField name="plan" type="object">
+  Full plan row with an `activities` array (ordered by `day_number`).
+</ResponseField>
+
+<CodeGroup>
+
+```bash cURL
+curl http://localhost:3000/api/coder/plans/14 \
+  -b cookies.txt
+```
+
+</CodeGroup>
+
+**404 Not Found** — plan not found or belongs to a different coder.
+
+---
+
+## Generate exercise
+
+**`POST /api/coder/exercise/generate`**
+
+Requests a new AI-generated coding exercise.
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST http://localhost:3000/api/coder/exercise/generate \
+  -H "Content-Type: application/json" \
+  -b cookies.txt
+```
+
+</CodeGroup>
+
+---
+
+## Submit exercise
+
+**`POST /api/coder/exercise/:exerciseId/submit`**
+
+Submits a solution for an exercise.
+
+### Path parameters
+
+<ParamField path="exerciseId" type="number" required>
+  ID of the exercise to submit.
+</ParamField>
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST http://localhost:3000/api/coder/exercise/55/submit \
+  -H "Content-Type: application/json" \
+  -b cookies.txt \
+  -d '{"codeSubmitted": "function sum(a, b) { return a + b; }"}'
+```
+
+</CodeGroup>
+
+---
+
+## Get exercise submissions
+
+**`GET /api/coder/exercise/:exerciseId/submissions`**
+
+Returns all submissions for a given exercise by the current coder.
+
+### Path parameters
+
+<ParamField path="exerciseId" type="number" required>
+  Exercise ID.
+</ParamField>
+
+<CodeGroup>
+
+```bash cURL
+curl http://localhost:3000/api/coder/exercise/55/submissions \
+  -b cookies.txt
+```
+
+</CodeGroup>
+
+---
+
+## List resources
+
+**`GET /api/coder/resources`**
+
+Returns the list of learning resources available to the coder.
+
+<CodeGroup>
+
+```bash cURL
+curl http://localhost:3000/api/coder/resources \
+  -b cookies.txt
+```
+
+</CodeGroup>
+
+---
+
+## Download resource
+
+**`GET /api/coder/resource/:id/download`**
+
+Generates a signed download URL for a PDF resource.
+
+### Path parameters
+
+<ParamField path="id" type="number" required>
+  Resource ID.
+</ParamField>
+
+<CodeGroup>
+
+```bash cURL
+curl http://localhost:3000/api/coder/resource/8/download \
+  -b cookies.txt
+```
+
+</CodeGroup>
+
+---
+
+## Search resources
+
+**`POST /api/coder/resources/search`**
+
+Searches the resource library.
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST http://localhost:3000/api/coder/resources/search \
+  -H "Content-Type: application/json" \
+  -b cookies.txt \
+  -d '{"query": "javascript async"}'
+```
+
+</CodeGroup>
+
+---
+
+## Complete activity
+
+**`PATCH /api/coder/activities/:id/complete`**
+
+Marks a plan activity as completed and optionally records a reflection.
+
+### Path parameters
+
+<ParamField path="id" type="number" required>
+  Activity ID.
+</ParamField>
+
+### Request body
+
+<ParamField body="reflectionText" type="string">
+  Optional written reflection on the activity.
+</ParamField>
+
+<ParamField body="timeSpent" type="number">
+  Time spent on the activity in minutes.
+</ParamField>
+
+### Response
+
+<ResponseField name="success" type="boolean">`true` on success.</ResponseField>
+<ResponseField name="data" type="object">The updated `activity_progress` record.</ResponseField>
+
+<CodeGroup>
+
+```bash cURL
+curl -X PATCH http://localhost:3000/api/coder/activities/33/complete \
+  -H "Content-Type: application/json" \
+  -b cookies.txt \
+  -d '{"reflectionText": "Learned a lot about recursion.", "timeSpent": 45}'
+```
+
+</CodeGroup>
+
+---
+
+## Mark feedback as read
+
+**`PATCH /api/coder/feedback/:id/read`**
+
+Marks a TL feedback item as read. Triggers a real-time notification to the TL that their feedback was seen.
+
+### Path parameters
+
+<ParamField path="id" type="number" required>
+  Feedback record ID.
+</ParamField>
+
+### Response
+
+<ResponseField name="success" type="boolean">`true` on success.</ResponseField>
+<ResponseField name="message" type="string">Confirmation message.</ResponseField>
+
+<CodeGroup>
+
+```bash cURL
+curl -X PATCH http://localhost:3000/api/coder/feedback/12/read \
+  -b cookies.txt
+```
+
+</CodeGroup>
+
+**404 Not Found** — feedback not found or does not belong to this coder.
+
+---
+
+## Get module milestones
+
+**`GET /api/coder/milestones`**
+
+Returns the week-by-week milestones for the coder's current module, joined with their Moodle progress scores.
+
+### Response
+
+<ResponseField name="milestones" type="object[]">
+  Array of milestone records with `module_name`, `week_number`, `week_name`, and `average_score`.
+</ResponseField>
+
+<CodeGroup>
+
+```bash cURL
+curl http://localhost:3000/api/coder/milestones \
+  -b cookies.txt
+```
+
+</CodeGroup>

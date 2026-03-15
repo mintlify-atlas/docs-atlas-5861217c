@@ -1,0 +1,116 @@
+---
+title: "Coder dashboard"
+description: "Your main hub in Kairo — see your academic progress, learning plans, notifications, and soft skills profile at a glance."
+---
+
+After logging in (or completing onboarding for the first time), you land on the coder dashboard. All data is loaded in a single request to `GET /api/coder/dashboard`, which returns your user profile, Moodle progress, active plan status, soft skills assessment, TL feedback notifications, risk flags, and performance test history.
+
+## Layout overview
+
+The dashboard uses a two-column layout on desktop:
+
+- **Left column (main):** Welcome card, stat row, module progress bar, performance tests, TL feedback
+- **Right column (aside):** Soft skills ring, learning style chip, skill bars, struggling topics
+
+On mobile, both columns stack vertically. A bottom navigation bar replaces the sidebar.
+
+## Top bar
+
+The top bar appears on every screen and contains:
+
+- **Module pill** — displays your current module name and active week (e.g., *Base de Datos · Semana 3*)
+- **Notification bell** — shows a red dot (`notif-dot`) when you have unread TL feedback
+- **Profile button** — your avatar and name, linking to `/views/coder/profile.html`
+- **Language and theme toggles**
+
+### Notification bell
+
+The bell uses **Supabase Realtime** to show an indicator the moment your Team Leader posts new feedback. The red dot appears when `tl_feedback.is_read = false` for any of your feedback rows. Clicking the bell opens a dropdown listing the latest messages. Reading a message calls `PATCH /api/coder/feedback/:id/read`, which sets `is_read = true` and removes the red dot.
+
+```
+TL posts feedback (is_read = false)
+        ↓
+Supabase Realtime pushes event to your browser
+        ↓
+Red dot appears on bell icon
+        ↓
+You click the bell → messages load
+        ↓
+You open a message → PATCH /api/coder/feedback/:id/read
+        ↓
+is_read = true → red dot disappears
+```
+
+## Stat row
+
+Four stat cards give you a quick snapshot of your academic standing:
+
+| Stat | Source field | Description |
+|------|-------------|-------------|
+| Current module | `users.current_module_id` → `modules.name` | The bootcamp module you are in |
+| Current week | `moodle_progress.current_week` | Which week of the module you are on |
+| Moodle score | `moodle_progress.average_score` | Your average score as a percentage |
+| Weeks completed | `moodle_progress.weeks_completed` (JSON array length) | Number of weeks you have finished |
+| Kairo Score | `users.kairo_score` | Points earned by completing plan days and activities |
+
+## Module progress bar
+
+Below the stat row, a progress track visualizes your position within the current module. Filled week dots represent `weeks_completed`; empty dots represent upcoming weeks. The label shows your completion percentage.
+
+## Learning plan cards
+
+Your 6 AI-generated learning plan cards are surfaced on the dashboard sorted by priority. Cards link through to the AI Trainer view where you can work through daily activities.
+
+<CardGroup cols={3}>
+  <Card title="High priority" icon="circle" iconType="solid" color="#ef4444">
+    2 cards — urgent focus areas where your Moodle score or autonomy score signals a gap that needs immediate attention.
+  </Card>
+  <Card title="Medium priority" icon="circle" iconType="solid" color="#eab308">
+    2 cards — important reinforcement topics that complement your current module work.
+  </Card>
+  <Card title="Low priority" icon="circle" iconType="solid" color="#22c55e">
+    2 cards — supplementary enrichment plans to deepen understanding at your own pace.
+  </Card>
+</CardGroup>
+
+Each card shows the targeted soft skill, plan type, and when it was generated. See [Learning plans](/coder/learning-plans) for a full explanation of how plans are built and how to work through them.
+
+## Soft skills profile
+
+The right sidebar shows a ring graphic with your average soft skills score (out of 5) and a chip displaying your `learning_style` value (`visual`, `auditory`, `kinesthetic`, or `mixed`). Below the ring, individual bars show your five skill scores from `soft_skills_assessment`:
+
+- `autonomy`
+- `time_management`
+- `problem_solving`
+- `communication`
+- `teamwork`
+
+## TL feedback panel
+
+The last section of the left column lists up to 5 recent feedback messages from your Team Leader. Each entry shows the TL's name, the message text, the feedback type (`weekly`, `activity`, or `general`), and the timestamp.
+
+<Note>
+  If the backend is unreachable, an error banner appears with a **Retry** button that re-triggers `loadDashboard()`.
+</Note>
+
+## Dashboard API
+
+```http
+GET /api/coder/dashboard
+```
+
+Returns a single JSON object containing:
+
+```json
+{
+  "user": { "fullName", "email", "clanId", "role", "kairoScore", "moduleId", "moduleName", "moduleTotalWeeks" },
+  "softSkills": { "autonomy", "timeManagement", "problemSolving", "communication", "teamwork", "learningStyle", "average" },
+  "progress": { "currentWeek", "averageScore", "strugglingTopics", "weeksCompleted", "weeksCompletedCount" },
+  "activePlan": { "id", "targetedSoftSkill", "planType", "generatedAt" },
+  "notifications": { "unread", "items": [{ "id", "text", "type", "tlName", "createdAt", "isRead" }] },
+  "riskFlags": [{ "level", "reason", "detectedAt" }],
+  "performanceTests": [{ "score", "status", "moduleName", "takenAt" }]
+}
+```
+
+All data is fetched in parallel via `Promise.all` — there is only one round-trip from the browser to the server when the dashboard loads.

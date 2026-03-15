@@ -1,0 +1,141 @@
+---
+title: "Coder analytics"
+description: "Deep-dive into an individual coder's academic progress, soft skills, complementary plans, and calculated risk level."
+---
+
+When you select a coder from the dashboard table, Kairo calls `GET /api/tl/coder/:id/details` and assembles a complete profile from multiple tables. This page explains every data point you will see and how it is calculated.
+
+## How to open a coder profile
+
+<Steps>
+  <Step title="Open the dashboard">
+    Navigate to the Team Leader dashboard. Your clan coders are listed in the main table.
+  </Step>
+  <Step title="Select a coder">
+    Click any row in the coder table. The side panel opens instantly with summary data.
+  </Step>
+  <Step title="Open the full profile">
+    Click the **profile link** inside the detail panel to navigate to the coder's complete profile page.
+  </Step>
+</Steps>
+
+## Academic progress — `moodle_progress`
+
+The `moodle_progress` table tracks each coder's performance per module:
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `current_week` | `INT` | Week number the coder is currently on |
+| `weeks_completed` | `JSONB` | Array of weeks already finished |
+| `average_score` | `DECIMAL(5,2)` | Mean score across all assessments |
+| `struggling_topics` | `TEXT[]` | Topics flagged as difficult by the system |
+
+<Note>
+  A coder can have multiple `moodle_progress` rows — one per module. The dashboard displays the record for the active module.
+</Note>
+
+## Soft skills — `soft_skills_assessment`
+
+Completed once during onboarding (when `first_login` transitions from `true` to `false`), this assessment captures five dimensions rated 1–5:
+
+| Column | Range | What it measures |
+|--------|-------|------------------|
+| `autonomy` | 1–5 | Ability to work independently without guidance |
+| `time_management` | 1–5 | Planning and meeting deadlines |
+| `problem_solving` | 1–5 | Breaking down and solving technical problems |
+| `communication` | 1–5 | Clarity and effectiveness in communication |
+| `teamwork` | 1–5 | Collaboration and peer support |
+| `learning_style` | enum | `visual`, `auditory`, `kinesthetic`, or `mixed` |
+
+These values inform both the risk calculation and the AI-generated complementary plans.
+
+## Complementary plans — `complementary_plans`
+
+Kairo's Python microservice generates up to 6 personalised study plans per coder, stored in `complementary_plans`. Each plan is one of the 6 cards the coder sees on their dashboard.
+
+| Column | Description |
+|--------|-------------|
+| `plan_content` | `JSONB` — structured plan with activities, goals, and resources |
+| `priority_level` | `low`, `medium`, or `high` — 2 cards per level |
+| `is_active` | `true` for the current generation of plans |
+| `soft_skills_snapshot` | Skills data at plan generation time |
+| `moodle_status_snapshot` | Moodle data at plan generation time |
+
+Plan activities are stored in `plan_activities` and individual completion is tracked in `activity_progress`.
+
+## Activity completion percentage — `activity_progress`
+
+The `v_coder_dashboard` view computes completion in real time:
+
+```sql
+ROUND(
+  (SUM(CASE WHEN ap.completed = TRUE THEN 1 ELSE 0 END)::NUMERIC /
+   NULLIF(COUNT(DISTINCT pa.id), 0)) * 100,
+  2
+) AS completion_percentage
+```
+
+This figure is the ratio of completed `activity_progress` records to total `plan_activities` for the coder's active plans.
+
+## Risk level — `v_coder_risk_analysis`
+
+The `v_coder_risk_analysis` view computes a `calculated_risk_level` for every coder using two signals:
+
+| Condition | `calculated_risk_level` |
+|-----------|------------------------|
+| `autonomy ≤ 2` **AND** `average_score < 70` | `high` |
+| `autonomy ≤ 2` **OR** `average_score < 70` | `medium` |
+| Neither condition met | `low` |
+
+This is separate from `current_risk_level`, which reflects the latest unresolved record in the `risk_flags` table (`COALESCE(rf.risk_level, 'low')`). The view exposes both so you can compare the auto-detected flag against the calculated value.
+
+<Tabs>
+  <Tab title="v_coder_risk_analysis (key columns)">
+    ```sql
+    SELECT
+      u.id,
+      u.full_name,
+      ssa.autonomy,
+      ssa.time_management,
+      mp.average_score,
+      COALESCE(rf.risk_level, 'low') AS current_risk_level,
+      CASE
+        WHEN ssa.autonomy <= 2 AND mp.average_score < 70 THEN 'high'
+        WHEN ssa.autonomy <= 2 OR  mp.average_score < 70 THEN 'medium'
+        ELSE 'low'
+      END AS calculated_risk_level,
+      COUNT(DISTINCT pa.id)                                AS total_activities,
+      SUM(CASE WHEN ap.completed = TRUE THEN 1 ELSE 0 END) AS completed_activities
+    FROM users u
+    LEFT JOIN soft_skills_assessment ssa ON u.id = ssa.coder_id
+    LEFT JOIN moodle_progress        mp  ON u.id = mp.coder_id
+    LEFT JOIN risk_flags             rf  ON u.id = rf.coder_id AND rf.resolved = FALSE
+    LEFT JOIN complementary_plans    cp  ON u.id = cp.coder_id AND cp.is_active = TRUE
+    LEFT JOIN plan_activities        pa  ON cp.id = pa.plan_id
+    LEFT JOIN activity_progress      ap  ON pa.id = ap.activity_id AND ap.coder_id = u.id
+    WHERE u.role = 'coder'
+    GROUP BY u.id, u.full_name, ssa.autonomy, ssa.time_management,
+             mp.average_score, rf.risk_level;
+    ```
+  </Tab>
+  <Tab title="Risk matrix">
+    | `autonomy` | `average_score` | Risk level |
+    |------------|-----------------|------------|
+    | ≤ 2 | < 70 | 🔴 `high` |
+    | ≤ 2 | ≥ 70 | 🟡 `medium` |
+    | > 2 | < 70 | 🟡 `medium` |
+    | > 2 | ≥ 70 | 🟢 `low` |
+  </Tab>
+</Tabs>
+
+## Score history — `score_events`
+
+You can view the point history for any coder via `GET /api/tl/coder/:id/score`. The endpoint returns the last 20 events with human-readable labels:
+
+| `event_type` | Label |
+|---|---|
+| `day_complete` | Day completed |
+| `exercise_submit` | Exercise submitted |
+| `tl_approved` | TL approved solution |
+| `plan_complete` | Plan completed (bonus) |
+| `inactivity` | Days without activity |

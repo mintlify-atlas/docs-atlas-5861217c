@@ -1,0 +1,180 @@
+---
+title: "ENUM types"
+description: "Reference for all 8 custom PostgreSQL ENUM types used in the Kairo database, with allowed values and usage context."
+---
+
+Kairo defines 8 custom PostgreSQL ENUM types to constrain values at the database level. Using ENUMs instead of plain strings prevents invalid data from being stored and makes the schema self-documenting.
+
+<Info>
+  All ENUM types are created before any table definitions in `schema.sql`.
+  If you need to add a new value to an existing ENUM, use `ALTER TYPE ... ADD VALUE`.
+</Info>
+
+```sql
+-- Example: adding a new value to an existing ENUM
+ALTER TYPE learning_style_enum ADD VALUE 'reading_writing';
+```
+
+---
+
+<AccordionGroup>
+
+  <Accordion title="role_enum — User roles">
+    Defines the two possible roles in the platform.
+
+    ```sql
+    CREATE TYPE role_enum AS ENUM ('coder', 'tl');
+    ```
+
+    | Value   | Description                                           |
+    | ------- | ----------------------------------------------------- |
+    | `coder` | A bootcamp student following learning plans           |
+    | `tl`    | A Team Leader who monitors and coaches a clan of coders |
+
+    **Used in:** `users.role`
+
+    The `role` column drives every RLS policy in the database. A user's role determines which rows they can read or write across all tables.
+  </Accordion>
+
+  <Accordion title="learning_style_enum — Learning style categories">
+    Captures the dominant learning style identified during the coder onboarding quiz.
+
+    ```sql
+    CREATE TYPE learning_style_enum AS ENUM ('visual', 'auditory', 'kinesthetic', 'mixed');
+    ```
+
+    | Value         | Description                                                   |
+    | ------------- | ------------------------------------------------------------- |
+    | `visual`      | Learns best through diagrams, videos, and written material    |
+    | `auditory`    | Learns best through listening and verbal explanation          |
+    | `kinesthetic` | Learns best through hands-on practice and experimentation     |
+    | `mixed`       | No single dominant style; responds well to varied formats     |
+
+    **Used in:** `soft_skills_assessment.learning_style`
+
+    The AI prompt builder uses this value to tailor the format of activities in a coder's learning plan. For example, a `visual` learner will receive more diagram-based exercises.
+  </Accordion>
+
+  <Accordion title="activity_type_enum — Activity autonomy level">
+    Classifies how much guidance a plan activity provides to the coder.
+
+    ```sql
+    CREATE TYPE activity_type_enum AS ENUM ('guided', 'semi_guided', 'autonomous');
+    ```
+
+    | Value          | Description                                                           |
+    | -------------- | --------------------------------------------------------------------- |
+    | `guided`       | Step-by-step instructions; suitable for coders with low autonomy      |
+    | `semi_guided`  | Partial instructions; coder applies judgment in some areas            |
+    | `autonomous`   | Open-ended task; coder is expected to work independently              |
+
+    **Used in:** `plan_activities.activity_type`
+
+    The AI generates a mix of types per plan based on the coder's `autonomy` score from `soft_skills_assessment`. Coders with autonomy ≤ 2 receive predominantly `guided` activities.
+  </Accordion>
+
+  <Accordion title="feedback_type_enum — Feedback classification">
+    Categorizes the kind of feedback a Team Leader is sending.
+
+    ```sql
+    CREATE TYPE feedback_type_enum AS ENUM ('weekly', 'activity', 'general');
+    ```
+
+    | Value      | Description                                                      |
+    | ---------- | ---------------------------------------------------------------- |
+    | `weekly`   | A structured weekly check-in message                            |
+    | `activity` | Feedback tied to a specific plan activity or learning card       |
+    | `general`  | An ad-hoc message not linked to any particular week or activity  |
+
+    **Used in:** `tl_feedback.feedback_type`
+
+    When `feedback_type = 'activity'`, the `tl_feedback.plan_id` column is typically populated to link the message to a specific `complementary_plans` record.
+  </Accordion>
+
+  <Accordion title="risk_level_enum — Risk severity">
+    Represents the severity of a risk flag or the overall risk level shown in an AI report.
+
+    ```sql
+    CREATE TYPE risk_level_enum AS ENUM ('low', 'medium', 'high');
+    ```
+
+    | Value    | Description                                                                      |
+    | -------- | -------------------------------------------------------------------------------- |
+    | `low`    | No concerning signals; coder is on track                                         |
+    | `medium` | One risk indicator present (low autonomy **or** score < 70)                      |
+    | `high`   | Both risk indicators present (autonomy ≤ 2 **and** score < 70)                   |
+
+    **Used in:** `risk_flags.risk_level`, `ai_reports.risk_level`, `v_coder_risk_analysis.calculated_risk_level`
+
+    The `v_coder_risk_analysis` view calculates `calculated_risk_level` using this enum:
+
+    ```sql
+    CASE
+      WHEN ssa.autonomy <= 2 AND mp.average_score < 70 THEN 'high'::risk_level_enum
+      WHEN ssa.autonomy <= 2 OR  mp.average_score < 70 THEN 'medium'::risk_level_enum
+      ELSE 'low'::risk_level_enum
+    END AS calculated_risk_level
+    ```
+  </Accordion>
+
+  <Accordion title="report_target_enum — AI report scope">
+    Defines the scope of an AI-generated report in `ai_reports`.
+
+    ```sql
+    CREATE TYPE report_target_enum AS ENUM ('coder', 'clan', 'cohort');
+    ```
+
+    | Value     | Description                                                         |
+    | --------- | ------------------------------------------------------------------- |
+    | `coder`   | Report focused on a single coder; `target_id` is the coder's `id`  |
+    | `clan`    | Report aggregating data for a clan; `target_id` identifies the clan |
+    | `cohort`  | Report for an entire cohort; `target_id` identifies the cohort      |
+
+    **Used in:** `ai_reports.target_type`
+
+    The `target_id` column meaning changes depending on `target_type`. For `coder` reports, it maps to `users.id`. For `clan` and `cohort`, it maps to the respective grouping identifier.
+  </Accordion>
+
+  <Accordion title="ai_agent_enum — AI agent types">
+    Identifies which AI agent made a call, as recorded in `ai_generation_log`.
+
+    ```sql
+    CREATE TYPE ai_agent_enum AS ENUM ('learning_plan', 'report_generator', 'risk_detector');
+    ```
+
+    | Value               | Description                                                          |
+    | ------------------- | -------------------------------------------------------------------- |
+    | `learning_plan`     | Generates the six personalized plan cards for a coder               |
+    | `report_generator`  | Produces executive summaries for Team Leaders                        |
+    | `risk_detector`     | Analyzes coder metrics to detect and classify risk                   |
+
+    **Used in:** `ai_generation_log.agent_type`
+
+    Every AI call — regardless of agent — is written to `ai_generation_log` with its full `input_payload` and `output_payload`. This allows per-agent cost tracking and debugging.
+  </Accordion>
+
+  <Accordion title="priority_level_enum — Plan card priority">
+    Controls how the six learning plan cards are ordered in the coder's dashboard.
+
+    ```sql
+    CREATE TYPE priority_level_enum AS ENUM ('low', 'medium', 'high');
+    ```
+
+    | Value    | Description                                                         |
+    | -------- | ------------------------------------------------------------------- |
+    | `high`   | 2 cards — urgent topics requiring immediate attention               |
+    | `medium` | 2 cards — important topics for steady progress                      |
+    | `low`    | 2 cards — complementary enrichment activities                       |
+
+    **Used in:** `complementary_plans.priority_level`
+
+    The frontend sorts plans by this field in descending order to always display the two `high` cards first:
+
+    ```sql
+    SELECT * FROM complementary_plans
+    WHERE coder_id = $1 AND is_active = true
+    ORDER BY priority_level DESC;
+    ```
+  </Accordion>
+
+</AccordionGroup>

@@ -1,0 +1,145 @@
+---
+title: "Resource search"
+description: "Search curated learning resources semantically by topic using all-MiniLM-L6-v2 embeddings, ranked by relevance."
+---
+
+<Note>
+  This is an **internal endpoint** called by the Node.js gateway and exercise generation flow. Results are clan-scoped — only resources associated with the given `clan_id` are returned.
+</Note>
+
+## Endpoint
+
+```http
+POST /search-resources
+```
+
+## How search works
+
+The service uses a two-stage fallback strategy:
+
+1. **Text search** — `db_manager.search_resources_by_text()` performs a keyword/text search filtered by `topic`, `clan_id`, and optionally `module_id`.
+2. **Module fallback** — if text search returns no results and `module_id` is provided, `db_manager.get_resources_for_clan()` returns any resources for that clan and module regardless of topic.
+
+Semantic embedding search (using the `all-MiniLM-L6-v2` 384-dimension model loaded at service startup) is available as an infrastructure capability via `embed_text()` and `model_ready()`, and can be incorporated into database search queries.
+
+If both `topic` and `clan_id` are missing or empty, the endpoint returns an empty `resources` array immediately without querying the database.
+
+## Request body
+
+<ParamField body="topic" type="string" required>
+  The topic to search for (e.g., `"INNER JOIN"`, `"React hooks"`, `"CSS Flexbox"`). Must be non-empty.
+</ParamField>
+
+<ParamField body="clan_id" type="string" required>
+  Clan identifier used to scope results. Only resources linked to this clan are returned. Must be non-empty.
+</ParamField>
+
+<ParamField body="module_id" type="number">
+  Optional module filter. When provided and the primary search returns nothing, the fallback query uses this to return any module-level resources for the clan.
+</ParamField>
+
+<ParamField body="limit" type="number" default="3">
+  Maximum number of resources to return.
+</ParamField>
+
+<ParamField body="coder_id" type="number">
+  Optional coder ID. Accepted for future personalisation; not currently used in query logic.
+</ParamField>
+
+## Response
+
+<ResponseField name="success" type="boolean" required>
+  Always `true` (even when `resources` is empty).
+</ResponseField>
+
+<ResponseField name="resources" type="object[]">
+  Array of resource objects, ordered by relevance. May be empty if no matching resources are found.
+  <Expandable title="resource properties">
+    <ResponseField name="id" type="number">
+      Database ID of the resource.
+    </ResponseField>
+    <ResponseField name="title" type="string">
+      Title of the learning resource.
+    </ResponseField>
+    <ResponseField name="url" type="string">
+      Link to the resource.
+    </ResponseField>
+    <ResponseField name="description" type="string">
+      Brief description of what the resource covers.
+    </ResponseField>
+    <ResponseField name="resource_type" type="string">
+      Type of resource (e.g., `"article"`, `"video"`, `"documentation"`).
+    </ResponseField>
+    <ResponseField name="topic" type="string">
+      Topic tag associated with the resource.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Embedding model
+
+| Property | Value |
+|---|---|
+| Model | `all-MiniLM-L6-v2` |
+| Dimensions | 384 |
+| Loaded at | Service startup (via `lifespan` hook) |
+| Status check | `GET /health` → `embeddings` field |
+
+If the model failed to load at startup, the `embeddings` field in `GET /health` returns `"unavailable"`. Text-based search continues to work in this state.
+
+## Example
+
+<CodeGroup>
+
+```bash cURL
+curl --request POST \
+  --url http://localhost:8000/search-resources \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "topic": "INNER JOIN",
+    "clan_id": "Alpha",
+    "module_id": 3,
+    "limit": 3
+  }'
+```
+
+</CodeGroup>
+
+**Response**
+
+```json
+{
+  "success": true,
+  "resources": [
+    {
+      "id": 14,
+      "title": "SQL JOINs explained",
+      "url": "https://example.com/sql-joins",
+      "description": "A visual guide to INNER, LEFT, RIGHT, and FULL JOINs with real examples.",
+      "resource_type": "article",
+      "topic": "JOINs"
+    },
+    {
+      "id": 22,
+      "title": "Practice: JOIN challenges",
+      "url": "https://example.com/join-exercises",
+      "description": "Ten progressive JOIN exercises with auto-graded feedback.",
+      "resource_type": "documentation",
+      "topic": "JOINs"
+    }
+  ]
+}
+```
+
+**Empty result (no matching resources)**
+
+```json
+{
+  "success": true,
+  "resources": []
+}
+```
+
+## Error responses
+
+This endpoint does not raise HTTP errors for missing results — it always returns `200` with an empty `resources` array when nothing is found. Database or embedding failures are logged server-side and may surface as empty results.

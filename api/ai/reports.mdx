@@ -1,0 +1,145 @@
+---
+title: "Report generation"
+description: "Generate an AI-written clan performance report for a Team Leader, persisted to the ai_reports table."
+---
+
+<Note>
+  This is a **TL-only endpoint** (`hasRole('tl')` enforced by the Node.js gateway). The Node.js gateway pre-computes clan membership, average Moodle scores, and high-risk counts before forwarding the payload here. The Python service writes directly to the `ai_reports` Supabase table.
+</Note>
+
+## Endpoint
+
+```http
+POST /generate-report
+```
+
+## Request body
+
+<ParamField body="clan" type="string" required>
+  Clan identifier (e.g., `"Alpha"`, `"Beta"`). Used as the report title and as `clan_id` when saving to `ai_reports`.
+</ParamField>
+
+<ParamField body="tl_id" type="number" required>
+  Database ID of the Team Leader requesting the report. Stored as `target_id` in `ai_reports`.
+</ParamField>
+
+<ParamField body="total_coders" type="number" required>
+  Total number of coders in the clan.
+</ParamField>
+
+<ParamField body="average_score" type="number" required>
+  Average Moodle score across all coders in the clan (0–100).
+</ParamField>
+
+<ParamField body="high_risk_count" type="number" required>
+  Number of coders with unresolved `high` or `critical` risk flags in the `risk_flags` table.
+</ParamField>
+
+<ParamField body="top_struggling_topics" type="string[]" default="[]">
+  Topic names that the most coders are struggling with. Included in the report's risk analysis section.
+</ParamField>
+
+<ParamField body="soft_skills_summary" type="object" default="{}">
+  Aggregated soft skills averages for the clan (e.g., `{"autonomy": 3.2, "teamwork": 4.1}`). Included in the report prompt when provided.
+</ParamField>
+
+## Response
+
+<ResponseField name="success" type="boolean" required>
+  `true` when the report was generated and saved to `ai_reports`.
+</ResponseField>
+
+<ResponseField name="report" type="object">
+  The AI-generated report object.
+  <Expandable title="properties">
+    <ResponseField name="report_title" type="string">
+      Report heading (e.g., `"Clan Alpha — Performance Report"`).
+    </ResponseField>
+    <ResponseField name="generated_date" type="string">
+      Human-readable date (e.g., `"March 15, 2026"`).
+    </ResponseField>
+    <ResponseField name="risk_level" type="string">
+      Overall clan risk assessment. One of: `"low"`, `"medium"`, `"high"`, `"critical"`.
+    </ResponseField>
+    <ResponseField name="summary" type="string">
+      Paragraph describing the clan's current state.
+    </ResponseField>
+    <ResponseField name="risks" type="string">
+      Paragraph identifying the main risks and concerns.
+    </ResponseField>
+    <ResponseField name="recommendations" type="string">
+      Paragraph of concrete recommendations for the TL.
+    </ResponseField>
+    <ResponseField name="action_items" type="string[]">
+      3–5 specific, actionable items the TL should act on.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Database record
+
+A successful call inserts one row into the `ai_reports` table:
+
+| Column | Value |
+|---|---|
+| `target_type` | `"clan"` |
+| `target_id` | `tl_id` from the request |
+| `summary_text` | `report.summary` |
+| `risk_level` | `report.risk_level` |
+| `recommendations` | `report.recommendations` |
+| `clan_id` | `clan` from the request |
+| `viewed_by_tl` | `false` |
+
+## Example
+
+<CodeGroup>
+
+```bash cURL
+curl --request POST \
+  --url http://localhost:8000/generate-report \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "clan": "Alpha",
+    "tl_id": 7,
+    "total_coders": 12,
+    "average_score": 61.4,
+    "high_risk_count": 3,
+    "top_struggling_topics": ["JOINs", "Normalization"],
+    "soft_skills_summary": {
+      "autonomy": 3.1,
+      "teamwork": 4.0,
+      "problem_solving": 2.8
+    }
+  }'
+```
+
+</CodeGroup>
+
+**Response**
+
+```json
+{
+  "success": true,
+  "report": {
+    "report_title": "Clan Alpha — Performance Report",
+    "generated_date": "March 15, 2026",
+    "risk_level": "high",
+    "summary": "Clan Alpha shows a below-average performance with an aggregate score of 61.4/100. Three coders are currently flagged as high or critical risk, representing 25% of the team.",
+    "risks": "The primary technical risk is concentrated around relational database concepts, particularly JOINs and normalisation. Low problem-solving scores (2.8/5) suggest coders are not yet applying debugging strategies independently.",
+    "recommendations": "Prioritise one-on-one sessions for the three high-risk coders this week. Schedule a group workshop on JOINs and ERD design to address the cluster of struggling topics.",
+    "action_items": [
+      "Schedule 30-minute 1:1s with the 3 high-risk coders before Wednesday.",
+      "Run a JOIN and normalisation workshop for the full clan.",
+      "Share curated SQL resources via the Kairo resource library.",
+      "Review moodle_progress for coders with scores below 50 and escalate if needed."
+    ]
+  }
+}
+```
+
+## Error responses
+
+| Status | Condition |
+|---|---|
+| `500` | The LLM returned malformed JSON. |
+| `500` | Groq API call or Supabase write failed. |

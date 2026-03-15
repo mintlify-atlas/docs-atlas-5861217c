@@ -1,0 +1,175 @@
+---
+title: "Running locally"
+description: "Start all three Kairo services for local development using three terminal instances."
+---
+
+Kairo's local development setup requires three terminal instances running simultaneously:
+
+- **Terminal A** — Node.js gateway (port 3000)
+- **Terminal B** — Python AI microservice (port 8000)
+- **Terminal C** — Frontend static server (port 5500)
+
+<Note>
+Complete the [Environment configuration](/setup/environment) and [Database setup](/setup/database) steps before running locally. Both backends will fail to start without valid `.env` files and a reachable database.
+</Note>
+
+## Terminal A: Node.js gateway
+
+<Steps>
+  <Step title="Install dependencies">
+    ```bash
+    cd backend-node
+    npm install
+    ```
+  </Step>
+
+  <Step title="Start the development server">
+    ```bash
+    npm run dev
+    ```
+
+    `nodemon` watches for file changes and automatically restarts the process.
+  </Step>
+
+  <Step title="Verify startup">
+    Wait for this output before starting the other services:
+
+    ```
+    🔄 Initializing Kairo services... DONE
+    ------------------------------------------------------------
+    🚀 KAIRO API GATEWAY STARTED SUCCESSFULLY
+    ------------------------------------------------------------
+    📡 URL      : http://localhost:3000
+    🌐 Origins  : http://localhost:5500, http://localhost:5173
+    🛠️  ENV      : development
+    ------------------------------------------------------------
+    ```
+
+    You can also hit the health endpoint:
+
+    ```bash
+    curl http://localhost:3000/api/health
+    ```
+  </Step>
+</Steps>
+
+## Terminal B: Python AI service
+
+<Steps>
+  <Step title="Create and activate a virtual environment">
+    <Tabs>
+      <Tab title="Linux">
+        ```bash
+        cd backend-python
+        python3 -m venv env
+        source env/bin/activate
+        ```
+      </Tab>
+      <Tab title="macOS">
+        ```bash
+        cd backend-python
+        python3 -m venv env
+        source env/bin/activate
+        ```
+      </Tab>
+      <Tab title="Windows">
+        ```powershell
+        cd backend-python
+        python -m venv env
+        env\Scripts\Activate.ps1
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+
+  <Step title="Install Python dependencies">
+    ```bash
+    pip install -r requirements.txt
+    ```
+
+    Key packages installed:
+
+    | Package | Version | Purpose |
+    |---|---|---|
+    | `fastapi` | 0.115.0 | Web framework |
+    | `uvicorn` | 0.30.6 | ASGI server |
+    | `groq` | 1.1.1 | Groq LLM client |
+    | `supabase` | 2.7.4 | Database client |
+    | `pydantic` | 2.9.2 | Request/response validation |
+    | `python-dotenv` | 1.0.1 | `.env` file loading |
+  </Step>
+
+  <Step title="Start the AI service">
+    ```bash
+    uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    ```
+
+    The `--reload` flag enables hot-reload on file changes.
+  </Step>
+
+  <Step title="Verify startup">
+    Look for these log lines:
+
+    ```
+    INFO:     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    INFO:       Kairo AI Service v2.3.0  |  starting up
+    INFO:     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    INFO:       LLM model    : llama-3.3-70b-versatile
+    INFO:       Embeddings   : ✓ all-MiniLM-L6-v2 (384d)
+    INFO:       Environment  : development
+    INFO:     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    INFO:     Uvicorn running on http://0.0.0.0:8000
+    ```
+
+    Confirm with a health check:
+
+    ```bash
+    curl http://localhost:8000/health
+    ```
+  </Step>
+</Steps>
+
+## Terminal C: Frontend
+
+<Steps>
+  <Step title="Serve the frontend">
+    <Tabs>
+      <Tab title="VS Code Live Server (recommended)">
+        Install the [Live Server extension](https://marketplace.visualstudio.com/items?itemName=ritwickdey.LiveServer) for VS Code.
+
+        Right-click `frontend/index.html` in the VS Code file explorer and select **Open with Live Server**. The extension serves the frontend on port 5500 automatically.
+      </Tab>
+      <Tab title="npx serve">
+        ```bash
+        npx serve frontend -p 5500
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+
+  <Step title="Open in browser">
+    Navigate to:
+
+    ```
+    http://127.0.0.1:5500/frontend
+    ```
+
+    The login page should load. Registering an account will trigger a database write; if you see an error, confirm the Node.js gateway started successfully and your `.env` database credentials are correct.
+  </Step>
+</Steps>
+
+## All services at a glance
+
+| Service | Command | Port | Verification |
+|---|---|---|---|
+| Node.js gateway | `npm run dev` | 3000 | `KAIRO API GATEWAY STARTED SUCCESSFULLY` |
+| Python AI engine | `uvicorn main:app --reload` | 8000 | `Kairo AI Service v2.3.0 \| starting up` |
+| Frontend | Live Server or `npx serve` | 5500 | Login page loads in browser |
+
+## Stopping services
+
+Press `Ctrl+C` in each terminal to stop the service. The Python virtual environment can be deactivated with:
+
+```bash
+deactivate
+```

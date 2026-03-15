@@ -1,0 +1,108 @@
+---
+title: "Team Leader dashboard"
+description: "Monitor every coder in your clan from a single view — scores, risk levels, soft skills, and exercise submissions."
+---
+
+The Team Leader dashboard is the central hub for monitoring your clan. After login, Kairo loads your clan automatically from the `users` table (`clan_id` column) and populates the entire view with live data for every coder assigned to you.
+
+## Overview stats
+
+The top row of the dashboard surfaces five key numbers at a glance:
+
+<CardGroup cols={2}>
+  <Card title="Coders in clan" icon="users">
+    Total coders in your clan, derived from `users WHERE role = 'coder' AND clan = <your_clan>`.
+  </Card>
+  <Card title="Onboarding complete" icon="circle-check">
+    Coders where `first_login = false` — they have completed the soft-skills quiz.
+  </Card>
+  <Card title="Pending onboarding" icon="hourglass-half">
+    Coders still on `first_login = true` who have not yet completed their assessment.
+  </Card>
+  <Card title="At risk" icon="triangle-exclamation">
+    Coders with an unresolved `risk_flags` record where `risk_level` is `high` or `critical` and `resolved = false`.
+  </Card>
+</CardGroup>
+
+<CardGroup cols={2}>
+  <Card title="Average Kairo score" icon="chart-line">
+    Mean `kairo_score` across all active coders in your clan, updated in real time.
+  </Card>
+  <Card title="Score average (Moodle)" icon="star">
+    Mean `average_score` from `moodle_progress`, reflecting academic performance per module.
+  </Card>
+</CardGroup>
+
+## Clan analytics panels
+
+Below the stat row, two analytics panels display clan-wide trends:
+
+<CardGroup cols={2}>
+  <Card title="Soft skills overview" icon="brain">
+    Clan averages for `autonomy`, `time_management`, `problem_solving`, `communication`, and `teamwork` (scale 1–5), sourced from `soft_skills_assessment`.
+  </Card>
+  <Card title="Learning styles distribution" icon="pie-chart">
+    Pie chart showing how coders are split across `visual`, `auditory`, `kinesthetic`, and `mixed` values from the `learning_style` column.
+  </Card>
+</CardGroup>
+
+## Coder table
+
+The main table lists every coder in your clan. It is filterable by three quick-access chips:
+
+| Filter | What it shows |
+|--------|---------------|
+| **All** | Every coder in the clan |
+| **At risk** | Coders with an unresolved `risk_flags` record |
+| **Pending** | Coders with `first_login = true` |
+
+Each row shows: name, `average_score`, `current_week`, `learning_style`, and risk status badge.
+
+<Info>
+  The table is ordered by risk severity first (critical → high → medium → none), then alphabetically by `full_name`. This ensures the coders who need the most attention appear at the top.
+</Info>
+
+## Coder detail panel
+
+Clicking any row in the coder table opens the side panel without leaving the page:
+
+- **Identity** — `full_name`, `clan_id`, `email`
+- **Academic** — `current_week`, `average_score`
+- **Learning style** — `learning_style` from `soft_skills_assessment`
+- **Skill bars** — `autonomy`, `time_management`, `problem_solving`, `communication`, `teamwork` visualised as progress bars
+- **Risk badge** — shown when the coder has an unresolved high-risk flag
+- **Quick feedback** — send a feedback message directly from the panel (see [Sending feedback](/tl/feedback))
+- **PDF export** — download a jsPDF summary of the coder's profile
+
+## Exercise submissions section
+
+Below the main content grid, the **Exercises submitted by the clan** section lists the 50 most recent exercise submissions from all coders in your clan, sourced via:
+
+```sql
+SELECT es.*, e.title, e.language, e.difficulty, e.expected_output,
+       u.full_name, cp.id AS plan_id
+FROM exercise_submissions es
+JOIN exercises e  ON es.exercise_id = e.id
+JOIN users u      ON es.coder_id = u.id
+JOIN complementary_plans cp ON e.plan_id = cp.id
+WHERE u.clan = $1
+ORDER BY es.submitted_at DESC
+LIMIT 50
+```
+
+Click **Review** on any submission to open the review modal. You can read the submitted code, see the expected output, and write feedback. When you submit, the coder receives +15 Kairo points and a real-time notification.
+
+## Score ranking
+
+The bottom of the dashboard renders two rankings pulled from `GET /api/tl/ranking`:
+
+- **Clan ranking** — all coders in your clan ordered by `kairo_score DESC`
+- **Global ranking** — top 10 coders across all clans
+
+## Sidebar navigation
+
+| Section | Route | Purpose |
+|---------|-------|---------|
+| Dashboard | `dashboard.html` | This page |
+| Activities | `assignment.html` | Publish PDF assignments and GitHub repos |
+| Groups | `group.html` | Organise coders into random, manual, or level-based groups |

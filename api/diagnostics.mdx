@@ -1,0 +1,231 @@
+---
+title: "Diagnostics"
+description: "Soft skills assessment endpoints for the onboarding diagnostic quiz. Coders submit raw answers; the server derives learning style and skill scores."
+---
+
+<Note>
+  Saving a diagnostic automatically triggers background generation of the coder's first AI complementary plan. The `POST /api/diagnostics` response is returned immediately — the plan is generated asynchronously by the Python microservice.
+</Note>
+
+## How scoring works
+
+The diagnostic accepts raw onboarding answers tagged with VARK, ILS (Index of Learning Styles), and Kolb dimensions. The server tallies these tags and derives:
+
+- **Learning style** — dominant VARK category (`visual`, `auditory`, `reading`, `kinesthetic`, or `mixed`). Must represent ≥ 35% of all VARK/ILS answers to qualify as dominant.
+- **Soft skill scores (1–5)** — mapped from ILS + Kolb patterns:
+  - `autonomy` ← REF + AC + RO
+  - `timeManagement` ← SEQ + AE + SNS
+  - `problemSolving` ← GLO + AC + INT
+  - `communication` ← ACT + CE + VRB
+  - `teamwork` ← ACT + CE + SNS
+
+---
+
+## Submit diagnostic
+
+**`POST /api/diagnostics`** — requires authentication, role: `coder`
+
+Accepts raw onboarding answers and saves the derived soft skills assessment. Responds immediately with the computed scores; plan generation continues in the background.
+
+### Request body
+
+<ParamField body="answers" type="object[]" required>
+  Array of answer objects from the 20-question onboarding quiz.
+  <Expandable title="answer object properties">
+    <ParamField body="questionId" type="number" required>
+      Question identifier (1–20).
+    </ParamField>
+    <ParamField body="optionId" type="number" required>
+      Selected option identifier.
+    </ParamField>
+    <ParamField body="score" type="string" required>
+      Tag for the selected option (e.g. `V`, `A`, `R`, `K`, `ACT`, `REF`, `SEQ`, `GLO`, `CE`, `RO`, `AC`, `AE`, `SNS`, `INT`, `VIS`, `VRB`).
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+### Response
+
+<ResponseField name="message" type="string">
+  Confirmation that the diagnostic was saved.
+</ResponseField>
+
+<ResponseField name="planRequested" type="boolean">
+  Always `true`. Indicates the AI plan generation was triggered in the background.
+</ResponseField>
+
+<ResponseField name="diagnostic" type="object">
+  <Expandable title="properties">
+    <ResponseField name="coderId" type="number">User ID of the coder.</ResponseField>
+    <ResponseField name="autonomy" type="number">Derived score 1–5.</ResponseField>
+    <ResponseField name="timeManagement" type="number">Derived score 1–5.</ResponseField>
+    <ResponseField name="problemSolving" type="number">Derived score 1–5.</ResponseField>
+    <ResponseField name="communication" type="number">Derived score 1–5.</ResponseField>
+    <ResponseField name="teamwork" type="number">Derived score 1–5.</ResponseField>
+    <ResponseField name="learningStyle" type="string">Dominant VARK style.</ResponseField>
+    <ResponseField name="assessedAt" type="string">ISO 8601 timestamp.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST http://localhost:3000/api/diagnostics \
+  -H "Content-Type: application/json" \
+  -b cookies.txt \
+  -d '{
+    "answers": [
+      { "questionId": 1, "optionId": 3, "score": "V" },
+      { "questionId": 2, "optionId": 1, "score": "REF" },
+      { "questionId": 3, "optionId": 4, "score": "SEQ" }
+    ]
+  }'
+```
+
+</CodeGroup>
+
+**201 Created**
+
+```json
+{
+  "message": "Diagnostic saved successfully",
+  "planRequested": true,
+  "diagnostic": {
+    "coderId": 7,
+    "autonomy": 3,
+    "timeManagement": 4,
+    "problemSolving": 2,
+    "communication": 3,
+    "teamwork": 4,
+    "learningStyle": "visual",
+    "assessedAt": "2026-03-15T12:00:00.000Z"
+  }
+}
+```
+
+**400 Bad Request** — `answers` array is missing or empty.
+
+```json
+{
+  "error": "answers array is required",
+  "expected": "{ answers: [{ questionId, optionId, score }] }"
+}
+```
+
+---
+
+## Get my diagnostic
+
+**`GET /api/diagnostics/me`** — requires authentication, role: `coder`
+
+Returns the soft skills assessment for the currently authenticated coder.
+
+### Response
+
+<ResponseField name="diagnostic" type="object">
+  <Expandable title="properties">
+    <ResponseField name="coderId" type="number">User ID.</ResponseField>
+    <ResponseField name="autonomy" type="number">Score 1–5.</ResponseField>
+    <ResponseField name="timeManagement" type="number">Score 1–5.</ResponseField>
+    <ResponseField name="problemSolving" type="number">Score 1–5.</ResponseField>
+    <ResponseField name="communication" type="number">Score 1–5.</ResponseField>
+    <ResponseField name="teamwork" type="number">Score 1–5.</ResponseField>
+    <ResponseField name="learningStyle" type="string">Dominant VARK style.</ResponseField>
+    <ResponseField name="assessedAt" type="string">ISO 8601 timestamp.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<CodeGroup>
+
+```bash cURL
+curl http://localhost:3000/api/diagnostics/me \
+  -b cookies.txt
+```
+
+</CodeGroup>
+
+**200 OK**
+
+```json
+{
+  "diagnostic": {
+    "coderId": 7,
+    "autonomy": 3,
+    "timeManagement": 4,
+    "problemSolving": 2,
+    "communication": 3,
+    "teamwork": 4,
+    "learningStyle": "visual",
+    "assessedAt": "2026-03-15T12:00:00.000Z"
+  }
+}
+```
+
+**404 Not Found** — coder has not yet completed the assessment.
+
+```json
+{
+  "error": "Diagnostic not found",
+  "message": "You have not completed the assessment yet"
+}
+```
+
+---
+
+## Get all diagnostics
+
+**`GET /api/diagnostics/all`** — requires authentication, role: `tl`
+
+Returns the soft skills diagnostics for all coders. Only accessible to team leaders.
+
+### Response
+
+<ResponseField name="diagnostics" type="object[]">
+  <Expandable title="item properties">
+    <ResponseField name="coderId" type="number">User ID.</ResponseField>
+    <ResponseField name="coderEmail" type="string">Email address.</ResponseField>
+    <ResponseField name="coderName" type="string">Display name.</ResponseField>
+    <ResponseField name="autonomy" type="number">Score 1–5.</ResponseField>
+    <ResponseField name="timeManagement" type="number">Score 1–5.</ResponseField>
+    <ResponseField name="problemSolving" type="number">Score 1–5.</ResponseField>
+    <ResponseField name="communication" type="number">Score 1–5.</ResponseField>
+    <ResponseField name="teamwork" type="number">Score 1–5.</ResponseField>
+    <ResponseField name="learningStyle" type="string">Dominant VARK style.</ResponseField>
+    <ResponseField name="assessedAt" type="string">ISO 8601 timestamp.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="total" type="number">
+  Total number of diagnostics returned.
+</ResponseField>
+
+<CodeGroup>
+
+```bash cURL
+curl http://localhost:3000/api/diagnostics/all \
+  -b cookies.txt
+```
+
+</CodeGroup>
+
+**200 OK**
+
+```json
+{
+  "diagnostics": [
+    {
+      "coderId": 7,
+      "coderEmail": "alice@example.com",
+      "coderName": "Alice Smith",
+      "autonomy": 3,
+      "timeManagement": 4,
+      "problemSolving": 2,
+      "communication": 3,
+      "teamwork": 4,
+      "learningStyle": "visual",
+      "assessedAt": "2026-03-15T12:00:00.000Z"
+    }
+  ],
+  "total": 1
+}
+```

@@ -1,0 +1,143 @@
+---
+title: "Progress tracking"
+description: "See how Kairo measures your activity completion, Moodle scores, and overall learning progress."
+---
+
+Kairo tracks your progress across two dimensions: **academic progress** synced from Moodle and **plan activity completion** recorded as you work through your learning plan cards.
+
+## Activity completion
+
+Every time you mark a day complete in the AI Trainer, the server records your progress in two places:
+
+**`complementary_plans.completed_days`** — a JSONB object keyed by day number:
+
+```json
+{
+  "1": { "completedAt": "2026-03-10T09:14:00Z" },
+  "2": { "completedAt": "2026-03-11T10:30:00Z" },
+  "5": { "completedAt": "2026-03-12T08:55:00Z" }
+}
+```
+
+**`activity_progress`** — one row per activity, per coder:
+
+```sql
+CREATE TABLE activity_progress (
+  id               SERIAL PRIMARY KEY,
+  activity_id      INT NOT NULL,   -- references plan_activities
+  coder_id         INT NOT NULL,   -- references users
+  completed        BOOLEAN DEFAULT FALSE,
+  reflection_text  TEXT,           -- optional reflection you write
+  time_spent_minutes INT,
+  completed_at     TIMESTAMP NULL,
+  UNIQUE (activity_id, coder_id)
+);
+```
+
+You can also update an activity's record individually via:
+
+```http
+PATCH /api/coder/activities/:id/complete
+```
+
+Body:
+```json
+{
+  "reflectionText": "I struggled with window functions but the hint helped.",
+  "timeSpent": 55
+}
+```
+
+## Completion percentage
+
+The `v_coder_dashboard` database view calculates your overall completion percentage across all active plans:
+
+```sql
+ROUND(
+  (SUM(CASE WHEN ap.completed = TRUE THEN 1 ELSE 0 END)::NUMERIC /
+   NULLIF(COUNT(DISTINCT pa.id), 0)) * 100,
+  2
+) AS completion_percentage
+```
+
+This percentage is computed from all `plan_activities` rows linked to your active `complementary_plans`, joined against your `activity_progress` rows.
+
+## Evidence submissions
+
+For activities that require you to demonstrate your work, you can submit a file or a link as evidence. Submissions are stored in `evidence_submissions`:
+
+```sql
+CREATE TABLE evidence_submissions (
+  id            SERIAL PRIMARY KEY,
+  activity_id   INT NOT NULL,
+  coder_id      INT NOT NULL,
+  file_url      TEXT,        -- path to uploaded file
+  link_url      TEXT,        -- e.g., GitHub repo or deployed project URL
+  description   TEXT,
+  submitted_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+You can submit both a file and a link for the same activity. Your TL can see all submissions and will use them when writing feedback.
+
+## Moodle progress sync
+
+Academic progress is synced to the `moodle_progress` table by the platform (not entered manually). The fields visible on your dashboard are:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `current_week` | `INT` | Which week of the module you are currently in |
+| `average_score` | `DECIMAL(5,2)` | Your overall average score as a percentage |
+| `struggling_topics` | `TEXT[]` | Array of topic names flagged as difficult this week |
+| `weeks_completed` | `JSONB` | Array of completed week objects with timestamps |
+
+<Warning>
+  If your `average_score` drops below 70, or your `autonomy` score from the diagnostic is ≤ 2, the AI risk detection system may generate a new high-priority plan and flag you in `risk_flags`. Your TL will be notified.
+</Warning>
+
+## Metrics shown on the dashboard
+
+The dashboard stat row pulls from the data above to display:
+
+| Metric | Source |
+|--------|--------|
+| Current module | `users.current_module_id` → `modules.name` |
+| Current week | `moodle_progress.current_week` |
+| Moodle score | `moodle_progress.average_score` |
+| Weeks completed | `LENGTH(moodle_progress.weeks_completed)` |
+| Kairo Score | `users.kairo_score` (incremented per day/plan completed) |
+
+The **module progress bar** renders a dot for each week in the module. Filled dots are weeks in `moodle_progress.weeks_completed`; empty dots are upcoming weeks.
+
+## Kairo Score
+
+Kairo Score is a gamification metric that reflects how actively you are engaging with your plans:
+
+- **+points** each time you complete a plan day (`day_complete` event)
+- **+bonus points** when you complete all 20 days of a plan (`plan_complete` event)
+
+Your current Kairo Score is shown in the welcome card and the stat row on the dashboard.
+
+## TL feedback notifications
+
+When your Team Leader posts feedback, a row is inserted into `tl_feedback` with `is_read = false`. Kairo uses **Supabase Realtime** to push this event to your browser immediately — no page refresh needed.
+
+The notification bell in the top bar shows a red dot (`notif-dot`) while any unread feedback exists. The dot clears when you open the feedback and the system calls:
+
+```http
+PATCH /api/coder/feedback/:id/read
+```
+
+This sets `tl_feedback.is_read = true` and notifies your TL in real time that you have read their message.
+
+### Feedback types
+
+| Type | When it's used |
+|------|----------------|
+| `weekly` | End-of-week summary from your TL |
+| `activity` | Comment on a specific activity or evidence submission |
+| `general` | Ad-hoc message from your TL |
+
+<Info>
+  The last 5 feedback messages also appear in the **TL Feedback** panel at the bottom of the dashboard main column, even after you have marked them as read.
+</Info>

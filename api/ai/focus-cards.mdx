@@ -1,0 +1,145 @@
+---
+title: "Generate focus cards"
+description: "Generate six prioritised study cards for a coder's current module, personalised using their soft skills profile and struggling topics."
+---
+
+<Note>
+  This is an **internal endpoint** called by the Node.js gateway (`POST /api/ai/generate-focus-cards`). The gateway resolves the coder's `module_id` and `struggling_topics` from Supabase before forwarding the request.
+</Note>
+
+## Endpoint
+
+```http
+POST /generate-focus-cards
+```
+
+## Request body
+
+<ParamField body="coder_id" type="number" required>
+  Database ID of the coder. Used to load their soft skills profile (learning style, autonomy, problem-solving score) for personalisation.
+</ParamField>
+
+<ParamField body="module_id" type="number" required>
+  ID of the module to generate cards for. The service fetches the module name and up to eight topic names from the database.
+</ParamField>
+
+<ParamField body="struggling_topics" type="string[]" default="[]">
+  Topic names the coder is currently struggling with. High-priority cards are generated to address these topics directly. If empty, the first topics in the module are used instead.
+</ParamField>
+
+## Response
+
+<ResponseField name="success" type="boolean" required>
+  `true` when cards were generated successfully.
+</ResponseField>
+
+<ResponseField name="data" type="object">
+  <Expandable title="properties" defaultOpen={true}>
+    <ResponseField name="cards" type="object[]">
+      Array of exactly six card objects: 2 `high`, 2 `medium`, and 2 `low` priority.
+      <Expandable title="card properties">
+        <ResponseField name="priority" type="string" required>
+          Priority tier: `"high"`, `"medium"`, or `"low"`.
+        </ResponseField>
+        <ResponseField name="topic" type="string" required>
+          Exact topic name from the module (e.g., `"JOINs"`, `"CSS Flexbox"`).
+        </ResponseField>
+        <ResponseField name="title" type="string" required>
+          Short, action-oriented card title.
+        </ResponseField>
+        <ResponseField name="theory" type="string" required>
+          3–4 sentence explanation adapted to the coder's learning style.
+        </ResponseField>
+        <ResponseField name="practice" type="object" required>
+          <Expandable title="properties">
+            <ResponseField name="description" type="string">
+              What the coder should do in approximately 20 minutes.
+            </ResponseField>
+            <ResponseField name="example" type="string">
+              A code snippet or concrete step-by-step example.
+            </ResponseField>
+          </Expandable>
+        </ResponseField>
+        <ResponseField name="pro_tips" type="string[]" required>
+          Two concrete tips for the coder.
+        </ResponseField>
+      </Expandable>
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Card priority distribution
+
+The LLM is instructed to produce exactly six cards with this fixed distribution:
+
+| Priority | Count | Focus |
+|---|---|---|
+| `high` | 2 | `struggling_topics` (or first module topics if none reported) |
+| `medium` | 2 | Related or prerequisite topics |
+| `low` | 2 | Supplementary or stretch topics |
+
+If the LLM returns a different count, a warning is logged but the response is still returned as-is.
+
+## Example
+
+<CodeGroup>
+
+```bash cURL
+curl --request POST \
+  --url http://localhost:8000/generate-focus-cards \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "coder_id": 42,
+    "module_id": 3,
+    "struggling_topics": ["JOINs", "Subqueries"]
+  }'
+```
+
+</CodeGroup>
+
+**Response**
+
+```json
+{
+  "success": true,
+  "data": {
+    "cards": [
+      {
+        "priority": "high",
+        "topic": "JOINs",
+        "title": "Master INNER JOIN in 20 minutes",
+        "theory": "An INNER JOIN returns only rows where a matching key exists in both tables...",
+        "practice": {
+          "description": "Write three queries that join the orders and customers tables.",
+          "example": "SELECT c.name, o.total FROM customers c INNER JOIN orders o ON c.id = o.customer_id;"
+        },
+        "pro_tips": [
+          "Always alias your tables to keep queries readable.",
+          "Check your ON clause — a wrong key is the most common JOIN bug."
+        ]
+      },
+      {
+        "priority": "high",
+        "topic": "Subqueries",
+        "title": "Subqueries: when and why",
+        "theory": "A subquery is a SELECT statement nested inside another query...",
+        "practice": {
+          "description": "Rewrite a JOIN you already know as a correlated subquery.",
+          "example": "SELECT name FROM customers WHERE id IN (SELECT customer_id FROM orders WHERE total > 100);"
+        },
+        "pro_tips": [
+          "Subqueries in WHERE run once per row — prefer JOINs for large datasets.",
+          "Use EXISTS instead of IN for better performance on NULLable columns."
+        ]
+      }
+    ]
+  }
+}
+```
+
+## Error responses
+
+| Status | Condition |
+|---|---|
+| `500` | The LLM returned malformed JSON. |
+| `500` | Groq API call failed. |

@@ -1,0 +1,110 @@
+---
+title: "AI trainer"
+description: "Use Kairo's on-demand AI assistant to get help with technical topics, code problems, and study guidance."
+---
+
+The AI Trainer (`/views/coder/IAtrainer.html`) is your personalized study companion inside Kairo. It serves two functions:
+
+1. **Plan viewer** — shows your active learning plan with a week/day navigator and daily activity cards
+2. **On-demand AI assistant** — lets you ask questions and get personalized help powered by the **Groq LLM**
+
+## Plan states
+
+When you open the AI Trainer, the view shows one of three states:
+
+<Tabs>
+  <Tab title="No plan">
+    If no active plan exists yet, a prompt appears with a **Generate my personalized plan** button. Clicking it calls `POST /api/coder/plan/request`, which triggers plan generation in the background. The screen then polls until the plan is ready.
+  </Tab>
+  <Tab title="Generating">
+    While the Python microservice builds your plan (usually a few seconds), a progress indicator appears with the message "Kairo is preparing your plan." The frontend polls `GET /api/coder/plan` until `hasPlan: true` is returned.
+  </Tab>
+  <Tab title="Active plan">
+    Your current plan is displayed with a week navigator (4 week tabs), day dots, and the content for the selected day. Two activity cards are shown per day: one **technical** card and one **soft skill** card.
+  </Tab>
+</Tabs>
+
+## Daily activity cards
+
+Each day in an active plan shows two cards side by side:
+
+**Technical card** — contains:
+- Badge showing the programming language or topic
+- Difficulty level
+- Estimated duration
+- Title and description
+- Resource links (curated by your TL via RAG)
+- An **Exercise of the day** button that opens a Monaco editor modal with an AI-generated coding exercise
+- A **Completado** button to mark the day's technical activity done
+
+**Soft skill card** — contains:
+- The soft skill being targeted (e.g., `autonomy`, `teamwork`)
+- Estimated duration
+- Title and description
+- A reflection prompt to answer after completing the activity
+
+## Exercise modal
+
+Clicking **Ejercicio del día** on the technical card calls:
+
+```http
+POST /api/coder/exercise/generate
+```
+
+This proxies to the Python microservice, which uses Groq to generate a coding exercise tailored to the day's topic. The modal contains:
+
+- Problem description
+- Hint system (paginated hints, revealed on demand)
+- A **Monaco editor** for writing your solution
+- Expected output
+- A reference solution (hidden by default)
+- A **Submit** button that calls `POST /api/coder/exercise/:exerciseId/submit` — your code is saved and visible to your TL
+
+## TL resources panel
+
+Below the activity cards, a **TL Resources** section shows files and links your Team Leader has uploaded for the current topic. These are fetched via:
+
+```http
+POST /api/coder/resources/search
+```
+
+The search uses RAG (retrieval-augmented generation) to surface the most relevant TL-uploaded resources for the day's topic. If your TL has not uploaded anything for this topic yet, an empty state is shown.
+
+## On-demand AI chat
+
+You can ask the AI assistant anything related to your coursework at any time. The request flows from your browser through the Node.js gateway to the Python microservice:
+
+```
+Browser  →  POST /api/ai/chat/ask  →  Node.js proxy  →  Python /chat/ask  →  Groq LLM
+```
+
+### What you can ask
+
+- **Topic explanations** — "Explain what a LEFT JOIN does with an example"
+- **Code help** — "Why is my SQL query returning duplicate rows?"
+- **Study guidance** — "What should I focus on this week given my plan?"
+- **Concept comparisons** — "What's the difference between `GROUP BY` and `PARTITION BY`?"
+
+<Tip>
+  Specific questions get better answers. Instead of "Help me with SQL", try "I have a query that joins `users` and `orders` but returns extra rows — here's the query: `SELECT …`". The more context you give, the more precise the response.
+</Tip>
+
+## Navigation
+
+Use the **week tabs** at the top of the plan to jump between weeks 1–4, and the **day dots** below them to jump to a specific day within the selected week. The left/right arrows on the day header let you step through days sequentially.
+
+<Note>
+  When you complete all 20 days, a trophy banner appears: "You completed the plan! Your next plan will be generated automatically on Monday."
+</Note>
+
+## API endpoints used by the AI Trainer
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/coder/plan` | Fetch active plan with `completedDays` and `currentDay` |
+| `POST` | `/api/coder/plan/request` | Request plan generation |
+| `POST` | `/api/coder/plan/:planId/day/:day/complete` | Mark a day complete |
+| `POST` | `/api/coder/exercise/generate` | Generate today's coding exercise via AI |
+| `POST` | `/api/coder/exercise/:exerciseId/submit` | Submit your solution |
+| `POST` | `/api/coder/resources/search` | Fetch TL resources for current topic |
+| `POST` | `/api/ai/chat/ask` | Send a message to the AI assistant |

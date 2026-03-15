@@ -1,0 +1,98 @@
+---
+title: "AI chat"
+description: "Send a question to Kairo, the AI coding tutor, and receive a concise, practical answer powered by Groq."
+---
+
+<Note>
+  This endpoint can be called directly from the frontend chat widget **or** via the Node.js proxy. No role restriction is enforced at the Python layer — access control must be applied upstream.
+</Note>
+
+## Endpoint
+
+```http
+POST /chat/ask
+```
+
+## Request body
+
+<ParamField body="message" type="string" required>
+  The coder's question or message. Must be a non-empty string. The service returns `400` if this field is blank or whitespace-only.
+</ParamField>
+
+<ParamField body="coder_id" type="number">
+  Optional database ID of the coder. Accepted for context but not currently used to personalise responses. Include it for future compatibility.
+</ParamField>
+
+## Response
+
+<ResponseField name="reply" type="string" required>
+  Kairo's response. Kept to a maximum of three paragraphs. A short direct answer always comes first, followed by an explanation if needed.
+</ResponseField>
+
+## Tutor persona
+
+Kairo is instructed to:
+
+- Give a short answer first, then explain if needed.
+- Use simple language — no jargon without explanation.
+- Keep responses to a maximum of three paragraphs (600 tokens).
+- Be concise, motivating, and practical.
+
+The underlying model is `llama-3.3-70b-versatile` (configurable via `MODEL_NAME`), called at temperature `0.7`.
+
+## Example conversation
+
+<CodeGroup>
+
+```bash cURL — first question
+curl --request POST \
+  --url http://localhost:8000/chat/ask \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "message": "What is the difference between INNER JOIN and LEFT JOIN?",
+    "coder_id": 42
+  }'
+```
+
+</CodeGroup>
+
+**Response**
+
+```json
+{
+  "reply": "An INNER JOIN returns only rows where a match exists in both tables. A LEFT JOIN returns all rows from the left table, and fills in NULL for columns from the right table when there is no match.\n\nUse INNER JOIN when you only care about records that exist on both sides. Use LEFT JOIN when you want to keep every record from the left table regardless of whether a match exists — for example, listing all customers including those with no orders.\n\nA quick rule: if you need NULLs to appear in your result for missing data, reach for LEFT JOIN."
+}
+```
+
+<CodeGroup>
+
+```bash cURL — follow-up question
+curl --request POST \
+  --url http://localhost:8000/chat/ask \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "message": "Can you show me a LEFT JOIN example with customers and orders?",
+    "coder_id": 42
+  }'
+```
+
+</CodeGroup>
+
+**Response**
+
+```json
+{
+  "reply": "Sure! Here is a simple example:\n\nSELECT c.name, o.total\nFROM customers c\nLEFT JOIN orders o ON c.id = o.customer_id;\n\nThis returns every customer. If a customer has placed no orders, the total column will be NULL instead of being omitted from the result."
+}
+```
+
+<Note>
+  The chat endpoint is stateless. Each request is independent — Kairo has no memory of previous messages in the conversation. If you need multi-turn context, include prior exchanges in the `message` field.
+</Note>
+
+## Error responses
+
+| Status | Condition |
+|---|---|
+| `400` | `message` is empty or whitespace-only. |
+| `500` | Groq API call failed. Response body: `{"detail": "AI tutor temporarily unavailable"}`. |

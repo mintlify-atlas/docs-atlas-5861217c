@@ -1,0 +1,375 @@
+---
+title: "Row Level Security"
+description: "How Kairo uses PostgreSQL Row Level Security on Supabase to ensure coders only see their own data and Team Leaders see their clan."
+---
+
+Row Level Security (RLS) is a PostgreSQL feature that enforces data access rules at the database layer. Every query — regardless of where it originates — is automatically filtered by the active user's identity and role. On Supabase, RLS integrates directly with the `auth.uid()` and `auth.jwt()` functions, making it the primary security boundary for the Kairo API.
+
+<Info>
+  RLS is enabled on **all 14 tables**. If a policy does not explicitly permit
+  an operation, the database returns zero rows (for SELECT) or raises a
+  permission error (for INSERT / UPDATE / DELETE).
+</Info>
+
+## How it works
+
+Kairo uses two mechanisms to identify the current user:
+
+| Function             | Returns                          | Used for                                |
+| -------------------- | -------------------------------- | --------------------------------------- |
+| `auth.uid()`         | UUID of the authenticated user   | Matching rows owned by the current user |
+| `auth.jwt()->>'role'`| Role claim from the JWT token    | Granting elevated access to TL users   |
+
+The general access pattern across all tables follows these rules:
+
+- **Coders** can read and write only their own rows (those where `coder_id = auth.uid()::int`).
+- **Team Leaders** can read all rows (via `auth.jwt()->>'role' = 'tl'`).
+- **Write access** is restricted: coders can update their own progress; only TLs can create plans and activities.
+
+---
+
+## Enabling RLS
+
+Before any policies take effect, RLS must be enabled on each table:
+
+```sql
+ALTER TABLE users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE soft_skills_assessment ENABLE ROW LEVEL SECURITY;
+ALTER TABLE modules ENABLE ROW LEVEL SECURITY;
+ALTER TABLE moodle_progress ENABLE ROW LEVEL SECURITY;
+ALTER TABLE topics ENABLE ROW LEVEL SECURITY;
+ALTER TABLE coder_struggling_topics ENABLE ROW LEVEL SECURITY;
+ALTER TABLE complementary_plans ENABLE ROW LEVEL SECURITY;
+ALTER TABLE plan_activities ENABLE ROW LEVEL SECURITY;
+ALTER TABLE activity_progress ENABLE ROW LEVEL SECURITY;
+ALTER TABLE evidence_submissions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE tl_feedback ENABLE ROW LEVEL SECURITY;
+ALTER TABLE risk_flags ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ai_reports ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ai_generation_log ENABLE ROW LEVEL SECURITY;
+```
+
+---
+
+## Policies by table
+
+<AccordionGroup>
+
+  <Accordion title="users">
+    | Policy name         | Operation | Rule                                              |
+    | ------------------- | --------- | ------------------------------------------------- |
+    | `users_own_profile` | SELECT    | `id = auth.uid()::int`                            |
+    | `users_tl_sees_all` | SELECT    | `auth.jwt()->>'role' = 'tl' OR id = auth.uid()::int` |
+    | `users_edit_own`    | UPDATE    | `id = auth.uid()::int`                            |
+
+    ```sql
+    CREATE POLICY "users_own_profile"
+      ON users FOR SELECT
+      USING (id = auth.uid()::int);
+
+    CREATE POLICY "users_tl_sees_all"
+      ON users FOR SELECT
+      USING (auth.jwt()->>'role' = 'tl' OR id = auth.uid()::int);
+
+    CREATE POLICY "users_edit_own"
+      ON users FOR UPDATE
+      USING (id = auth.uid()::int)
+      WITH CHECK (id = auth.uid()::int);
+    ```
+
+    <Note>The UPDATE policy does not restrict which columns can be changed. Application logic is responsible for preventing coders from modifying their own `role`.</Note>
+  </Accordion>
+
+  <Accordion title="soft_skills_assessment">
+    | Policy name            | Operation | Rule                                    |
+    | ---------------------- | --------- | --------------------------------------- |
+    | `skills_own_assessment`| SELECT    | `coder_id = auth.uid()::int`            |
+    | `skills_tl_sees_all`   | SELECT    | `auth.jwt()->>'role' = 'tl'`            |
+    | `skills_edit_own`      | UPDATE    | `coder_id = auth.uid()::int`            |
+
+    ```sql
+    CREATE POLICY "skills_own_assessment"
+      ON soft_skills_assessment FOR SELECT
+      USING (coder_id = auth.uid()::int);
+
+    CREATE POLICY "skills_tl_sees_all"
+      ON soft_skills_assessment FOR SELECT
+      USING (auth.jwt()->>'role' = 'tl');
+
+    CREATE POLICY "skills_edit_own"
+      ON soft_skills_assessment FOR UPDATE
+      USING (coder_id = auth.uid()::int)
+      WITH CHECK (coder_id = auth.uid()::int);
+    ```
+  </Accordion>
+
+  <Accordion title="modules and topics (public read)">
+    Modules and topics are reference data visible to all authenticated users. Only TLs can create or modify them.
+
+    ```sql
+    -- modules
+    CREATE POLICY "modules_read_all"
+      ON modules FOR SELECT
+      USING (true);
+
+    CREATE POLICY "modules_tl_only"
+      ON modules FOR INSERT
+      WITH CHECK (auth.jwt()->>'role' = 'tl');
+
+    CREATE POLICY "modules_tl_edit"
+      ON modules FOR UPDATE
+      USING (auth.jwt()->>'role' = 'tl');
+
+    -- topics
+    CREATE POLICY "topics_read_all"
+      ON topics FOR SELECT
+      USING (true);
+
+    CREATE POLICY "topics_tl_only"
+      ON topics FOR INSERT
+      WITH CHECK (auth.jwt()->>'role' = 'tl');
+    ```
+  </Accordion>
+
+  <Accordion title="moodle_progress">
+    | Policy name             | Operation | Rule                                 |
+    | ----------------------- | --------- | ------------------------------------ |
+    | `progress_own_record`   | SELECT    | `coder_id = auth.uid()::int`         |
+    | `progress_tl_sees_all`  | SELECT    | `auth.jwt()->>'role' = 'tl'`         |
+    | `progress_edit_own`     | UPDATE    | `coder_id = auth.uid()::int`         |
+
+    ```sql
+    CREATE POLICY "progress_own_record"
+      ON moodle_progress FOR SELECT
+      USING (coder_id = auth.uid()::int);
+
+    CREATE POLICY "progress_tl_sees_all"
+      ON moodle_progress FOR SELECT
+      USING (auth.jwt()->>'role' = 'tl');
+
+    CREATE POLICY "progress_edit_own"
+      ON moodle_progress FOR UPDATE
+      USING (coder_id = auth.uid()::int)
+      WITH CHECK (coder_id = auth.uid()::int);
+    ```
+  </Accordion>
+
+  <Accordion title="coder_struggling_topics">
+    Coders can fully manage their own struggling topics (insert and delete). TLs can read all.
+
+    ```sql
+    CREATE POLICY "struggles_own_topics"
+      ON coder_struggling_topics FOR SELECT
+      USING (coder_id = auth.uid()::int);
+
+    CREATE POLICY "struggles_tl_sees_all"
+      ON coder_struggling_topics FOR SELECT
+      USING (auth.jwt()->>'role' = 'tl');
+
+    CREATE POLICY "struggles_coder_manage"
+      ON coder_struggling_topics FOR INSERT
+      WITH CHECK (coder_id = auth.uid()::int);
+
+    CREATE POLICY "struggles_coder_delete"
+      ON coder_struggling_topics FOR DELETE
+      USING (coder_id = auth.uid()::int);
+    ```
+  </Accordion>
+
+  <Accordion title="complementary_plans">
+    Plans are created and edited exclusively by TLs. Coders can only read their own.
+
+    | Policy name          | Operation | Rule                                 |
+    | -------------------- | --------- | ------------------------------------ |
+    | `plans_own_plans`    | SELECT    | `coder_id = auth.uid()::int`         |
+    | `plans_tl_sees_all`  | SELECT    | `auth.jwt()->>'role' = 'tl'`         |
+    | `plans_tl_create`    | INSERT    | `auth.jwt()->>'role' = 'tl'`         |
+    | `plans_tl_edit`      | UPDATE    | `auth.jwt()->>'role' = 'tl'`         |
+
+    ```sql
+    CREATE POLICY "plans_own_plans"
+      ON complementary_plans FOR SELECT
+      USING (coder_id = auth.uid()::int);
+
+    CREATE POLICY "plans_tl_sees_all"
+      ON complementary_plans FOR SELECT
+      USING (auth.jwt()->>'role' = 'tl');
+
+    CREATE POLICY "plans_tl_create"
+      ON complementary_plans FOR INSERT
+      WITH CHECK (auth.jwt()->>'role' = 'tl');
+
+    CREATE POLICY "plans_tl_edit"
+      ON complementary_plans FOR UPDATE
+      USING (auth.jwt()->>'role' = 'tl');
+    ```
+  </Accordion>
+
+  <Accordion title="plan_activities">
+    Activities belong to plans. A coder can read activities from plans assigned to them via a subquery. Only TLs can create activities.
+
+    ```sql
+    CREATE POLICY "activities_own_plans"
+      ON plan_activities FOR SELECT
+      USING (
+        plan_id IN (
+          SELECT id FROM complementary_plans WHERE coder_id = auth.uid()::int
+        )
+      );
+
+    CREATE POLICY "activities_tl_sees_all"
+      ON plan_activities FOR SELECT
+      USING (auth.jwt()->>'role' = 'tl');
+
+    CREATE POLICY "activities_tl_create"
+      ON plan_activities FOR INSERT
+      WITH CHECK (auth.jwt()->>'role' = 'tl');
+    ```
+  </Accordion>
+
+  <Accordion title="activity_progress">
+    Coders can read, insert, and update their own progress records. TLs can read all.
+
+    ```sql
+    CREATE POLICY "activity_progress_own"
+      ON activity_progress FOR SELECT
+      USING (coder_id = auth.uid()::int);
+
+    CREATE POLICY "activity_progress_tl"
+      ON activity_progress FOR SELECT
+      USING (auth.jwt()->>'role' = 'tl');
+
+    CREATE POLICY "activity_progress_edit"
+      ON activity_progress FOR UPDATE
+      USING (coder_id = auth.uid()::int)
+      WITH CHECK (coder_id = auth.uid()::int);
+
+    CREATE POLICY "activity_progress_insert"
+      ON activity_progress FOR INSERT
+      WITH CHECK (coder_id = auth.uid()::int);
+    ```
+  </Accordion>
+
+  <Accordion title="evidence_submissions">
+    Coders submit and read their own evidence. TLs can read all submissions.
+
+    ```sql
+    CREATE POLICY "evidence_own_submissions"
+      ON evidence_submissions FOR SELECT
+      USING (coder_id = auth.uid()::int);
+
+    CREATE POLICY "evidence_tl_sees_all"
+      ON evidence_submissions FOR SELECT
+      USING (auth.jwt()->>'role' = 'tl');
+
+    CREATE POLICY "evidence_coder_submit"
+      ON evidence_submissions FOR INSERT
+      WITH CHECK (coder_id = auth.uid()::int);
+    ```
+  </Accordion>
+
+  <Accordion title="tl_feedback">
+    The most complex set of policies. Coders receive feedback; TLs send it. Both can update the same rows for different reasons (TL edits content; coder marks as read).
+
+    | Policy name                | Operation | Who          | Rule                                                      |
+    | -------------------------- | --------- | ------------ | --------------------------------------------------------- |
+    | `feedback_own_feedback`    | SELECT    | Coder        | `coder_id = auth.uid()::int`                              |
+    | `feedback_tl_sends`        | SELECT    | TL           | `tl_id = auth.uid()::int OR role = 'tl'`                  |
+    | `feedback_tl_create`       | INSERT    | TL only      | `role = 'tl' AND tl_id = auth.uid()::int`                 |
+    | `feedback_tl_edit`         | UPDATE    | TL only      | `tl_id = auth.uid()::int AND role = 'tl'`                 |
+    | `feedback_coder_mark_read` | UPDATE    | Coder only   | `coder_id = auth.uid()::int AND role = 'coder'`           |
+
+    ```sql
+    CREATE POLICY "feedback_own_feedback"
+      ON tl_feedback FOR SELECT
+      USING (coder_id = auth.uid()::int);
+
+    CREATE POLICY "feedback_tl_sends"
+      ON tl_feedback FOR SELECT
+      USING (tl_id = auth.uid()::int OR auth.jwt()->>'role' = 'tl');
+
+    CREATE POLICY "feedback_tl_create"
+      ON tl_feedback FOR INSERT
+      WITH CHECK (auth.jwt()->>'role' = 'tl' AND tl_id = auth.uid()::int);
+
+    CREATE POLICY "feedback_tl_edit"
+      ON tl_feedback FOR UPDATE
+      USING (tl_id = auth.uid()::int AND auth.jwt()->>'role' = 'tl');
+
+    -- Coders can flip is_read = true but cannot edit other fields
+    CREATE POLICY "feedback_coder_mark_read"
+      ON tl_feedback FOR UPDATE
+      USING (coder_id = auth.uid()::int AND auth.jwt()->>'role' = 'coder');
+    ```
+
+    <Tip>
+      The `feedback_coder_mark_read` policy allows coders to mark a message as
+      read. Application code should ensure coders only update `is_read` and not
+      other columns.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="risk_flags">
+    Risk flags are read-only for coders. Only the system (via service role) creates them. TLs see all.
+
+    ```sql
+    CREATE POLICY "risk_own_alerts"
+      ON risk_flags FOR SELECT
+      USING (coder_id = auth.uid()::int);
+
+    CREATE POLICY "risk_tl_sees_all"
+      ON risk_flags FOR SELECT
+      USING (auth.jwt()->>'role' = 'tl');
+    ```
+  </Accordion>
+
+  <Accordion title="ai_reports">
+    Reports are visible to Team Leaders only. Coders have no access.
+
+    ```sql
+    CREATE POLICY "reports_tl_only"
+      ON ai_reports FOR SELECT
+      USING (auth.jwt()->>'role' = 'tl');
+    ```
+  </Accordion>
+
+  <Accordion title="ai_generation_log">
+    The audit log is restricted to Team Leaders in normal operation. In production, access may be further restricted to a service role.
+
+    ```sql
+    CREATE POLICY "ai_log_tl_only"
+      ON ai_generation_log FOR SELECT
+      USING (auth.jwt()->>'role' = 'tl');
+    ```
+
+    <Note>
+      For sensitive production deployments, consider disabling direct TL access
+      and exposing this data only through a backend service with a Supabase
+      service role key.
+    </Note>
+  </Accordion>
+
+</AccordionGroup>
+
+---
+
+## Troubleshooting
+
+**`permission denied` on a table**
+
+The current user's role or `uid()` does not match any policy USING clause for that operation. Check:
+1. The user's `role` value in the `users` table matches the JWT claim.
+2. The row's ownership column (`coder_id`, `tl_id`, etc.) matches `auth.uid()::int`.
+3. RLS is enabled and the correct policy file has been applied.
+
+**Coder can see another coder's data**
+
+Verify the policy uses `USING` (not just `WITH CHECK`) so it filters reads, not just writes. Also confirm the Supabase JWT contains the correct `role` claim.
+
+**TL cannot see any data**
+
+The JWT role claim may be missing or set to `'coder'`. In Supabase, this claim is typically set in the auth metadata or via a custom JWT hook. Verify with:
+
+```sql
+SELECT auth.jwt()->>'role';
+```

@@ -1,0 +1,111 @@
+---
+title: "Risk detection"
+description: "Understand how Kairo automatically flags at-risk coders, how to read risk reports, and how to resolve flags."
+---
+
+Kairo's risk detection system continuously monitors two signals for every coder and automatically creates records in the `risk_flags` table when thresholds are crossed. As a Team Leader, you see these flags surfaced on your dashboard and can take action directly from there.
+
+## How risk is calculated
+
+The `v_coder_risk_analysis` database view evaluates each coder in real time using data from `soft_skills_assessment` and `moodle_progress`:
+
+```sql
+CASE
+  WHEN ssa.autonomy <= 2 AND mp.average_score < 70 THEN 'high'
+  WHEN ssa.autonomy <= 2 OR  mp.average_score < 70 THEN 'medium'
+  ELSE 'low'
+END AS calculated_risk_level
+```
+
+| `autonomy` (1–5) | `average_score` | Calculated risk |
+|------------------|-----------------|------------------|
+| ≤ 2 | < 70 | 🔴 `high` |
+| ≤ 2 | ≥ 70 | 🟡 `medium` |
+| > 2 | < 70 | 🟡 `medium` |
+| > 2 | ≥ 70 | 🟢 `low` |
+
+<Warning>
+  A coder flagged as **high** risk meets both critical thresholds simultaneously: they score below 70 in Moodle **and** rated their own autonomy at 2 or lower. This combination signals an urgent need for direct mentorship.
+</Warning>
+
+## The `risk_flags` table
+
+When the system (or a TL) creates a risk flag, a record is inserted into `risk_flags`:
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `coder_id` | `INT` | The coder the flag belongs to |
+| `risk_level` | `risk_level_enum` | `low`, `medium`, or `high` |
+| `reason` | `TEXT` | Human-readable explanation of why the flag was raised |
+| `auto_detected` | `BOOLEAN` | `true` when created by the automated system; `false` when created manually |
+| `detected_at` | `TIMESTAMP` | When the flag was created |
+| `resolved` | `BOOLEAN` | `false` = active flag; `true` = flag has been addressed |
+| `resolved_at` | `TIMESTAMP` | Timestamp set when `resolved` is toggled to `true` |
+
+## Fetching active risk flags
+
+The `GET /api/tl/risk-flags` endpoint returns all unresolved flags across your cohort, ordered from most to least severe:
+
+```javascript
+// From tlControllers.js — getRiskReports()
+SELECT rf.*, u.full_name, u.email
+FROM risk_flags rf
+JOIN users u ON rf.coder_id = u.id
+WHERE rf.resolved = false
+ORDER BY
+  CASE rf.risk_level
+    WHEN 'critical' THEN 1
+    WHEN 'high'     THEN 2
+    WHEN 'medium'   THEN 3
+    ELSE 4
+  END
+```
+
+The response is available in the `active_risks` array. The dashboard stat card labelled **At risk** counts flags where `risk_level IN ('high', 'critical')`.
+
+## AI-generated risk reports — `ai_reports`
+
+Beyond individual flags, Kairo's Python microservice (using the `report_generator` AI agent) produces narrative reports stored in `ai_reports`:
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `target_type` | `report_target_enum` | Scope: `coder`, `clan`, or `cohort` |
+| `target_id` | `INT` | ID of the coder, clan, or cohort being reported on |
+| `summary_text` | `TEXT` | AI-generated narrative summary |
+| `risk_level` | `risk_level_enum` | Overall risk level of the report |
+| `recommendations` | `TEXT` | AI-generated action items for the TL |
+| `viewed_by_tl` | `BOOLEAN` | Tracks whether the TL has opened the report |
+| `generated_at` | `TIMESTAMP` | When the report was created |
+
+<Info>
+  Reports can target three scopes. A `coder`-scoped report focuses on one individual; a `clan`-scoped report analyses patterns across your entire clan; a `cohort`-scoped report covers all clans together.
+</Info>
+
+## Resolving a risk flag
+
+Once you have taken action — sent feedback, scheduled a call, or confirmed the coder is back on track — mark the flag as resolved:
+
+<Steps>
+  <Step title="Identify the flag">
+    Find the coder in the dashboard table. A risk badge and a warning icon are displayed in their row and in the detail side panel.
+  </Step>
+  <Step title="Take action">
+    Send targeted feedback (see [Sending feedback](/tl/feedback)) or follow up with the coder directly. Document the intervention.
+  </Step>
+  <Step title="Mark as resolved">
+    Set `resolved = true` on the `risk_flags` record. The system records the current timestamp in `resolved_at`. The coder will no longer appear in the at-risk count.
+  </Step>
+</Steps>
+
+<Warning>
+  Resolving a flag does **not** change the underlying `calculated_risk_level` in `v_coder_risk_analysis`. If the coder's `autonomy` or `average_score` does not improve, a new flag will be auto-detected on the next evaluation cycle.
+</Warning>
+
+## Dashboard risk indicators
+
+| Indicator | Location | What it means |
+|-----------|----------|---------------|
+| Red stat card | Top stats row | Number of coders with active `high`/`critical` flags |
+| Risk badge in topbar | `⚠ N en riesgo` | Count of unresolved high-risk flags for quick reference |
+| Row badge in coder table | Inline in table | Individual coder has an unresolved flag |
+| Risk badge in side panel | Detail panel | Flag details including `reason` and `risk_level` |

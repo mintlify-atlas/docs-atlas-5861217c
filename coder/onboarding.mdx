@@ -1,0 +1,119 @@
+---
+title: "Onboarding"
+description: "Complete the one-time soft skills quiz to personalize your Kairo learning experience."
+---
+
+The first time you log in to Kairo, the platform redirects you to the **Diagnostic** screen before you can access your dashboard. This is a one-time, 30-question soft skills and learning style assessment that takes 5–8 minutes to complete.
+
+<Info>
+  The quiz runs once. After you submit it, you are redirected to your dashboard and will not see the diagnostic screen again unless you reset your profile from settings.
+</Info>
+
+## Why this matters
+
+Your answers feed directly into Kairo's AI plan generation engine. The Python microservice reads your `soft_skills_assessment` record — alongside your Moodle academic progress — every time it generates or refreshes your 6 learning plan cards. Without completing the diagnostic, no personalized plans can be created.
+
+## How the quiz is structured
+
+The 30 questions are grouped into 7 blocks. Each block explores a different dimension of how you learn:
+
+| Block | Focus | What it measures |
+|-------|-------|------------------|
+| **B1** | Sensory channels | How you absorb information: visually, auditorily, by reading, or hands-on |
+| **B2** | Active vs. Reflective | Whether you jump in immediately or think before acting |
+| **B3** | Concrete vs. Intuitive | Whether you prefer real examples or abstract ideas |
+| **B4** | Sequential vs. Global | Whether you work step-by-step or need the big picture first |
+| **B5** | Visual vs. Verbal | Whether diagrams or written descriptions work better for you |
+| **B6** | Experience cycle | How you process learning: experiencing, observing, analyzing, or experimenting |
+| **B7** | Integrative profile | Cross-cutting questions that tie all dimensions together |
+
+The scoring engine applies three international learning models — **VARK**, **Felder–Soloman (ILS)**, and **Kolb** — to derive your profile from the raw answers.
+
+## What gets saved
+
+When you submit the quiz, the backend calls `POST /api/diagnostics` and saves a row to the `soft_skills_assessment` table:
+
+```sql
+INSERT INTO soft_skills_assessment (
+  coder_id,
+  autonomy,          -- 1–5
+  time_management,   -- 1–5
+  problem_solving,   -- 1–5
+  communication,     -- 1–5
+  teamwork,          -- 1–5
+  learning_style,    -- visual | auditory | kinesthetic | mixed
+  raw_answers        -- JSONB of all 30 answers
+)
+```
+
+The five skill scores (each on a 1–5 scale) are **derived on the server** from the tag tallies in your raw answers. The frontend never calculates scores itself.
+
+<Note>
+  There are no right or wrong answers. Choose the option that best reflects your natural reaction, not the one you think sounds best.
+</Note>
+
+## Score derivation
+
+The backend maps ILS and Kolb answer tags to soft skill scores using psychological mappings:
+
+| Skill | Derived from |
+|-------|--------------|
+| `autonomy` | REF (reflective) + AC (abstract conceptualization) + RO (reflective observation) |
+| `time_management` | SEQ (sequential) + AE (active experimentation) + SNS (sensing) |
+| `problem_solving` | GLO (global) + AC + INT (intuitive) |
+| `communication` | ACT (active) + CE (concrete experience) + VRB (verbal) |
+| `teamwork` | ACT + CE + SNS |
+
+The dominant `learning_style` is set to whichever VARK category accounts for ≥ 35% of your total V/A/R/K answers. If no single style reaches that threshold, it defaults to `mixed`.
+
+## Step-by-step flow
+
+<Steps>
+  <Step title="Log in for the first time">
+    After a successful login, the server checks `users.first_login`. When it is `true`, you are redirected to `/views/coder/onboarding.html` instead of the dashboard.
+  </Step>
+
+  <Step title="Read the block header and answer each question">
+    A block badge (e.g., **B1**) and its title appear above the question card. Click the option that best describes you — the next question loads automatically. You can also press **A**, **B**, **C**, or **D** on your keyboard. Use the **← Back** button to change a previous answer.
+  </Step>
+
+  <Step title="Complete all 30 questions">
+    A progress bar in the top navigation shows your position (e.g., *B1 · Question 3 of 30 · 10%*). Once you answer the final question, the form is submitted automatically.
+  </Step>
+
+  <Step title="Backend scores and saves your assessment">
+    The server tallies your answer tags, derives the five skill scores and your `learning_style`, and inserts a row into `soft_skills_assessment`. It immediately responds with `201` and then fires a background request to the Python microservice to generate your first interpretive learning plan.
+
+    ```json
+    // POST /api/diagnostics — response
+    {
+      "message": "Diagnostic saved successfully",
+      "planRequested": true,
+      "diagnostic": {
+        "autonomy": 3,
+        "timeManagement": 4,
+        "problemSolving": 3,
+        "communication": 2,
+        "teamwork": 4,
+        "learningStyle": "visual",
+        "assessedAt": "2026-03-15T14:22:00Z"
+      }
+    }
+    ```
+  </Step>
+
+  <Step title="Redirected to your dashboard">
+    After submission, you land on the coder dashboard. Your learning plan cards may take a few seconds to appear while the AI generates them in the background.
+  </Step>
+</Steps>
+
+## API reference
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/diagnostics` | Submit raw answers; server derives scores and saves assessment |
+| `GET` | `/api/diagnostics/me` | Retrieve your existing assessment |
+
+<Warning>
+  If you navigate away during the quiz, your progress is not saved. You will need to start from question 1 again.
+</Warning>

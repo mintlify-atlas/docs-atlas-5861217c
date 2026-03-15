@@ -1,0 +1,144 @@
+---
+title: "Generate learning plan"
+description: "Generate a personalised weekly learning roadmap for a coder based on their soft skills profile and Moodle progress."
+---
+
+<Note>
+  This is an **internal endpoint** called by the Node.js gateway. The gateway fetches the coder's `module_id`, `current_week`, and `struggling_topics` from Supabase before forwarding the request here.
+</Note>
+
+## Endpoint
+
+```http
+POST /generate-plan
+```
+
+## Request body
+
+<ParamField body="coder_id" type="number" required>
+  Database ID of the coder for whom the plan is generated. Used to fetch soft skills, profile data, and Moodle progress.
+</ParamField>
+
+<ParamField body="module_id" type="number" required>
+  ID of the module the plan is generated for. Used to fetch module metadata, weeks, and topics.
+</ParamField>
+
+<ParamField body="plan_type" type="string" default="interpretive">
+  Generation strategy. Accepted values:
+  - `interpretive` — uses only soft skills and module content.
+  - `analytical` — also incorporates Moodle score, struggling topics, and weeks completed.
+</ParamField>
+
+<ParamField body="current_week" type="number" default="1">
+  The coder's current week in the module. Used to tailor pacing. For `analytical` plans, this is auto-fetched from Moodle if not supplied.
+</ParamField>
+
+<ParamField body="average_score" type="number" default="0.0">
+  Coder's average Moodle score (0–100). Only relevant for `analytical` plans. Auto-fetched if `0.0` and `weeks_completed` is empty.
+</ParamField>
+
+<ParamField body="struggling_topics" type="string[]" default="[]">
+  List of topic names the coder is struggling with. Used to prioritise remediation activities in the plan.
+</ParamField>
+
+<ParamField body="weeks_completed" type="object[]" default="[]">
+  Array of Moodle week progress objects. For `analytical` plans, auto-fetched from Moodle if the array is empty.
+</ParamField>
+
+## Response
+
+<ResponseField name="success" type="boolean" required>
+  `true` when the plan was generated and saved successfully.
+</ResponseField>
+
+<ResponseField name="plan_id" type="number">
+  ID of the newly created plan record in the `plans` table. `null` if persistence failed.
+</ResponseField>
+
+<ResponseField name="plan" type="object">
+  The AI-generated plan object. Shape is defined by the LLM prompt; typical fields include `targeted_soft_skill`, weekly activities, and a `status` field (`"ok"` or `"fallback"`).
+</ResponseField>
+
+<ResponseField name="metadata" type="object">
+  <Expandable title="properties">
+    <ResponseField name="plan_type" type="string">
+      The `plan_type` that was used (`"interpretive"` or `"analytical"`).
+    </ResponseField>
+    <ResponseField name="coder_id" type="number">
+      The coder's database ID.
+    </ResponseField>
+    <ResponseField name="module_id" type="number">
+      The module's database ID.
+    </ResponseField>
+    <ResponseField name="module_name" type="string">
+      Human-readable name of the module.
+    </ResponseField>
+    <ResponseField name="current_week" type="number">
+      The week used when generating the plan.
+    </ResponseField>
+    <ResponseField name="execution_ms" type="number">
+      Total server-side execution time in milliseconds.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Example
+
+<CodeGroup>
+
+```bash cURL
+curl --request POST \
+  --url http://localhost:8000/generate-plan \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "coder_id": 42,
+    "module_id": 3,
+    "plan_type": "analytical",
+    "current_week": 2,
+    "average_score": 67.5,
+    "struggling_topics": ["JOINs", "Subqueries"],
+    "weeks_completed": []
+  }'
+```
+
+</CodeGroup>
+
+**Response**
+
+```json
+{
+  "success": true,
+  "plan_id": 188,
+  "plan": {
+    "targeted_soft_skill": "problem_solving",
+    "status": "ok",
+    "weeks": [
+      {
+        "week": 2,
+        "focus": "SQL JOINs and Subqueries",
+        "activities": [
+          { "day": 1, "title": "INNER JOIN deep dive", "duration_min": 45 },
+          { "day": 2, "title": "Subquery patterns", "duration_min": 60 }
+        ]
+      }
+    ]
+  },
+  "metadata": {
+    "plan_type": "analytical",
+    "coder_id": 42,
+    "module_id": 3,
+    "module_name": "Bases de Datos",
+    "current_week": 2,
+    "execution_ms": 3241
+  }
+}
+```
+
+## Error responses
+
+| Status | Condition |
+|---|---|
+| `400` | `plan_type` is not `interpretive` or `analytical`. |
+| `400` | No diagnostic (soft skills) found for `coder_id`. The coder must complete onboarding first. |
+| `404` | `module_id` does not exist in the database. |
+| `500` | LLM call or database persistence failed. |

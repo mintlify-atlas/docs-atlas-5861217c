@@ -1,0 +1,209 @@
+---
+title: "Migrations"
+description: "How to set up the Kairo database from scratch and apply versioned schema migrations and seed data."
+---
+
+Kairo uses a file-based migration approach. The baseline schema lives in `schema.sql`, RLS policies in `rls_policies.sql`, and incremental changes are versioned SQL files in the `migrations/` directory.
+
+<Warning>
+  Always apply migrations in numerical order. Skipping a migration may leave
+  the schema in an inconsistent state.
+</Warning>
+
+## Initial setup
+
+<Steps>
+
+  <Step title="Create the database schema">
+    Run `schema.sql` to create all 14 tables, 2 views, and 8 ENUM types.
+
+    **Option A — Supabase SQL Editor:**
+    1. Open your project in the Supabase dashboard.
+    2. Navigate to **SQL Editor**.
+    3. Paste the contents of `schema.sql` and click **Run**.
+
+    **Option B — psql:**
+    ```bash
+    psql -U your_user -d your_database -f schema.sql
+    ```
+  </Step>
+
+  <Step title="Enable Row Level Security">
+    Run `rls_policies.sql` to activate RLS on every table and create all access policies.
+
+    **Supabase SQL Editor:**
+    Paste the contents of `rls_policies.sql` and click **Run**.
+
+    **psql:**
+    ```bash
+    psql -U your_user -d your_database -f rls_policies.sql
+    ```
+
+    <Info>
+      Skipping this step leaves all tables readable and writable by any
+      authenticated user. Never run in production without RLS enabled.
+    </Info>
+  </Step>
+
+  <Step title="Apply versioned migrations">
+    Run each migration file in order. These add columns, indexes, and tables
+    that were introduced after the initial schema.
+
+    ```bash
+    psql -U your_user -d your_database -f migrations/001_add_clans_and_priority_and_notifications.sql
+    psql -U your_user -d your_database -f migrations/002_add_raw_answers_to_soft_skills.sql
+    psql -U your_user -d your_database -f migrations/005_create_user_profiles.sql
+    ```
+
+    <Note>
+      All migration files use `ADD COLUMN IF NOT EXISTS` and `CREATE INDEX IF NOT EXISTS`,
+      so they are safe to re-run if needed.
+    </Note>
+  </Step>
+
+  <Step title="Load seed data (development only)">
+    Populate the database with sample users, modules, topics, and academic progress for testing.
+
+    ```bash
+    psql -U your_user -d your_database -f seeds/users.sql
+    ```
+
+    This inserts:
+    - 2 Team Leaders and 6 Coders across 3 clans (Turing, Tesla, McCarthy)
+    - 6 bootcamp modules with 4 topics each
+    - Soft skills assessments and Moodle progress records
+    - Struggling topic entries for at-risk coders
+
+    <Warning>
+      Seed data is for development and testing only. Do not run in production.
+      Passwords in seed files are plaintext placeholders — always use bcrypt in production.
+    </Warning>
+  </Step>
+
+  <Step title="Verify the setup">
+    Run these queries to confirm everything was applied correctly:
+
+    ```sql
+    SELECT COUNT(*) FROM users;                    -- 8 after seeding
+    SELECT COUNT(*) FROM modules;                  -- 6 after seeding
+    SELECT COUNT(*) FROM soft_skills_assessment;   -- 6 after seeding
+    ```
+
+    To list all tables:
+    ```sql
+    SELECT tablename FROM pg_tables
+    WHERE schemaname = 'public'
+    ORDER BY tablename;
+    ```
+  </Step>
+
+</Steps>
+
+---
+
+## Migration files
+
+<AccordionGroup>
+
+  <Accordion title="001 — Add clans, priority level, and notifications">
+    **File:** `migrations/001_add_clans_and_priority_and_notifications.sql`
+
+    Introduces three features required by the 6-card learning system and the notification bell:
+
+    - `users.clan_id VARCHAR(50)` — identifies the coder's clan (`Turing`, `Tesla`, `McCarthy`)
+    - `priority_level_enum` ENUM type — if it doesn't already exist
+    - `complementary_plans.priority_level priority_level_enum` — orders the six cards (2 high, 2 medium, 2 low)
+    - `tl_feedback.is_read BOOLEAN` — drives the red dot on the notification bell
+
+    ```sql
+    -- Add clan support
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS clan_id VARCHAR(50);
+    CREATE INDEX IF NOT EXISTS idx_users_clan_id ON users(clan_id);
+
+    -- Add priority level ENUM and column
+    DO $$
+    BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'priority_level_enum') THEN
+            CREATE TYPE priority_level_enum AS ENUM ('low', 'medium', 'high');
+        END IF;
+    END
+    $$;
+    ALTER TABLE complementary_plans ADD COLUMN IF NOT EXISTS priority_level priority_level_enum DEFAULT 'medium';
+    CREATE INDEX IF NOT EXISTS idx_complementary_plans_priority ON complementary_plans(priority_level);
+
+    -- Add is_read for notifications
+    ALTER TABLE tl_feedback ADD COLUMN IF NOT EXISTS is_read BOOLEAN DEFAULT FALSE;
+    CREATE INDEX IF NOT EXISTS idx_tl_feedback_is_read ON tl_feedback(is_read);
+    CREATE INDEX IF NOT EXISTS idx_tl_feedback_coder_unread ON tl_feedback(coder_id, is_read);
+    ```
+  </Accordion>
+
+  <Accordion title="002 — Add raw_answers to soft_skills_assessment">
+    **File:** `migrations/002_add_raw_answers_to_soft_skills.sql`
+
+    Adds a `raw_answers` JSONB column to `soft_skills_assessment` to store the full onboarding quiz response array. This column was missing from the original schema, causing INSERT failures in the `softSkills.js` model.
+
+    ```sql
+    ALTER TABLE soft_skills_assessment
+      ADD COLUMN IF NOT EXISTS raw_answers JSONB;
+
+    COMMENT ON COLUMN soft_skills_assessment.raw_answers
+      IS 'Full onboarding answers array [{questionId, optionId, score}] for audit/re-processing';
+    ```
+  </Accordion>
+
+  <Accordion title="005 — Create user_profiles table">
+    **File:** `migrations/005_create_user_profiles.sql`
+
+    Creates a `user_profiles` table to store extended personal and social data for both coders and Team Leaders. This is a 1:1 extension of `users` managed separately to keep the core `users` table lean.
+
+    ```sql
+    CREATE TABLE IF NOT EXISTS user_profiles (
+      user_id      INT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      phone        VARCHAR(20),
+      location     VARCHAR(100),
+      birth_date   DATE,
+      bio          TEXT,
+      github_url   TEXT,
+      linkedin_url TEXT,
+      twitter_url  TEXT,
+      portfolio_url TEXT,
+      updated_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_user_profiles_user_id ON user_profiles(user_id);
+    ```
+  </Accordion>
+
+</AccordionGroup>
+
+---
+
+## Resetting the database
+
+To wipe all data and start from scratch (development only):
+
+```sql
+-- Drop all data in dependency order
+TRUNCATE TABLE ai_generation_log CASCADE;
+TRUNCATE TABLE ai_reports CASCADE;
+TRUNCATE TABLE risk_flags CASCADE;
+TRUNCATE TABLE evidence_submissions CASCADE;
+TRUNCATE TABLE tl_feedback CASCADE;
+TRUNCATE TABLE activity_progress CASCADE;
+TRUNCATE TABLE plan_activities CASCADE;
+TRUNCATE TABLE complementary_plans CASCADE;
+TRUNCATE TABLE coder_struggling_topics CASCADE;
+TRUNCATE TABLE topics CASCADE;
+TRUNCATE TABLE moodle_progress CASCADE;
+TRUNCATE TABLE modules CASCADE;
+TRUNCATE TABLE soft_skills_assessment CASCADE;
+TRUNCATE TABLE users RESTART IDENTITY CASCADE;
+
+-- Then re-run seeds
+-- psql -U your_user -d your_database -f seeds/users.sql
+```
+
+<Warning>
+  `TRUNCATE ... CASCADE` is irreversible. Never run this in production.
+</Warning>

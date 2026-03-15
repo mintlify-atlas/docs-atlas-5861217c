@@ -1,0 +1,241 @@
+---
+title: "Database overview"
+description: "High-level overview of Kairo's PostgreSQL database: 14 tables, 2 views, and 8 custom ENUM types hosted on Supabase."
+---
+
+Kairo's database runs on **PostgreSQL 14+** hosted on **Supabase**. It consists of 14 tables, 2 views, and 8 custom ENUM types that power every aspect of the platform — from onboarding quizzes to AI-generated learning plans.
+
+<Info>
+  Row Level Security (RLS) is enabled on every table. Coders only see their own
+  data; Team Leaders see all coders within their clan. See [Row Level
+  Security](/database/rls-policies) for details.
+</Info>
+
+## At a glance
+
+| Component    | Count | Description                                        |
+| ------------ | ----- | -------------------------------------------------- |
+| Tables       | 14    | Core data storage                                  |
+| Views        | 2     | Pre-computed summaries for dashboards              |
+| ENUM types   | 8     | Constrained value sets for roles, styles, and more |
+| Engine       | —     | PostgreSQL 14+ on Supabase                         |
+| Security     | —     | RLS enabled on all tables                          |
+
+## Table groups
+
+<CardGroup cols={2}>
+  <Card title="Users" icon="users">
+    `users` and `soft_skills_assessment`. Stores every coder and Team Leader
+    account, plus each coder's 20-question onboarding quiz results (autonomy,
+    time management, learning style, and more).
+  </Card>
+  <Card title="Academic" icon="book-open">
+    `modules`, `topics`, `moodle_progress`, and `coder_struggling_topics`.
+    Tracks bootcamp modules, their topics, each coder's academic scores synced
+    from Moodle, and which topics they struggle with.
+  </Card>
+  <Card title="Plans" icon="layout-grid">
+    `complementary_plans`, `plan_activities`, `activity_progress`, and
+    `evidence_submissions`. The six AI-generated learning cards per coder, the
+    daily activities inside each card, and how coders track and evidence their
+    completion.
+  </Card>
+  <Card title="Communication" icon="message-circle">
+    `tl_feedback` and `risk_flags`. Team Leader messages to coders (with unread
+    notification support) and automated risk alerts triggered when a coder's
+    scores or autonomy fall below thresholds.
+  </Card>
+  <Card title="AI" icon="cpu">
+    `ai_reports` and `ai_generation_log`. AI-generated executive reports for
+    Team Leaders and a full audit log of every AI call made by the platform
+    (agent type, input/output payloads, execution time, success status).
+  </Card>
+</CardGroup>
+
+## Entity relationship diagram
+
+```mermaid
+erDiagram
+    users {
+        int id PK
+        varchar email
+        varchar password
+        varchar full_name
+        role_enum role
+        varchar clan_id
+        boolean first_login
+        timestamp created_at
+    }
+
+    soft_skills_assessment {
+        int id PK
+        int coder_id FK
+        int autonomy
+        int time_management
+        int problem_solving
+        int communication
+        int teamwork
+        learning_style_enum learning_style
+        timestamp assessed_at
+    }
+
+    moodle_progress {
+        int id PK
+        int coder_id FK
+        int module_id FK
+        int current_week
+        jsonb weeks_completed
+        text[] struggling_topics
+        decimal average_score
+        timestamp updated_at
+    }
+
+    modules {
+        int id PK
+        varchar name
+        text description
+        int total_weeks
+        timestamp created_at
+    }
+
+    topics {
+        int id PK
+        int module_id FK
+        varchar name
+        varchar category
+    }
+
+    coder_struggling_topics {
+        int id PK
+        int coder_id FK
+        int topic_id FK
+        timestamp reported_at
+    }
+
+    complementary_plans {
+        int id PK
+        int coder_id FK
+        int module_id FK
+        jsonb plan_content
+        priority_level_enum priority_level
+        jsonb soft_skills_snapshot
+        jsonb moodle_status_snapshot
+        boolean is_active
+        timestamp generated_at
+    }
+
+    plan_activities {
+        int id PK
+        int plan_id FK
+        int day_number
+        varchar title
+        text description
+        int estimated_time_minutes
+        activity_type_enum activity_type
+        varchar skill_focus
+    }
+
+    activity_progress {
+        int id PK
+        int activity_id FK
+        int coder_id FK
+        boolean completed
+        text reflection_text
+        int time_spent_minutes
+        timestamp completed_at
+    }
+
+    evidence_submissions {
+        int id PK
+        int activity_id FK
+        int coder_id FK
+        text file_url
+        text link_url
+        text description
+        timestamp submitted_at
+    }
+
+    tl_feedback {
+        int id PK
+        int coder_id FK
+        int tl_id FK
+        int plan_id FK
+        text feedback_text
+        feedback_type_enum feedback_type
+        boolean is_read
+        timestamp created_at
+    }
+
+    risk_flags {
+        int id PK
+        int coder_id FK
+        risk_level_enum risk_level
+        text reason
+        boolean auto_detected
+        boolean resolved
+        timestamp detected_at
+    }
+
+    ai_reports {
+        int id PK
+        report_target_enum target_type
+        int target_id
+        text summary_text
+        risk_level_enum risk_level
+        boolean viewed_by_tl
+        timestamp generated_at
+    }
+
+    ai_generation_log {
+        int id PK
+        int coder_id FK
+        ai_agent_enum agent_type
+        jsonb input_payload
+        jsonb output_payload
+        boolean success
+        timestamp generated_at
+    }
+
+    %% Relaciones 1:1
+    users ||--o| soft_skills_assessment : "completa una vez"
+
+    %% Relaciones 1:N
+    users ||--o{ moodle_progress : "tiene progreso en"
+    users ||--o{ complementary_plans : "recibe planes"
+    users ||--o{ coder_struggling_topics : "reporta dificultad en"
+    users ||--o{ activity_progress : "lleva progreso de"
+    users ||--o{ evidence_submissions : "sube evidencia"
+    users ||--o{ risk_flags : "puede tener alertas"
+    users ||--o{ tl_feedback : "recibe feedback (coder)"
+    users ||--o{ tl_feedback : "envía feedback (tl)"
+    users ||--o{ ai_generation_log : "genera IA para"
+
+    modules ||--o{ moodle_progress : "contiene progreso"
+    modules ||--o{ complementary_plans : "origen de planes"
+    modules ||--o{ topics : "contiene temas"
+
+    topics ||--o{ coder_struggling_topics : "referenciado por"
+
+    complementary_plans ||--o{ plan_activities : "tiene actividades (1:N)"
+    complementary_plans ||--o{ tl_feedback : "puede recibir feedback"
+
+    plan_activities ||--o{ activity_progress : "seguimiento por coder"
+    plan_activities ||--o{ evidence_submissions : "acepta evidencias"
+```
+
+## Key relationships
+
+| Relationship                              | Type    | Description                                              |
+| ----------------------------------------- | ------- | -------------------------------------------------------- |
+| `users` → `soft_skills_assessment`        | 1:1     | Each coder completes the assessment once                 |
+| `users` → `complementary_plans`           | 1:N     | A coder can have up to 6 active plans at a time          |
+| `complementary_plans` → `plan_activities` | 1:N     | Each plan card contains multiple daily activities        |
+| `users` (TL) → `tl_feedback`             | 1:N     | A Team Leader sends feedback to many coders              |
+| `moodle_progress` → `complementary_plans` | Indirect | Low scores trigger AI plan generation                   |
+
+## Views
+
+| View                   | Purpose                                                                                   |
+| ---------------------- | ----------------------------------------------------------------------------------------- |
+| `v_coder_dashboard`    | Aggregates autonomy, learning style, current module, score, and activity completion rate  |
+| `v_coder_risk_analysis`| Calculates risk level: `high` when autonomy ≤ 2 **and** score < 70; `medium` when either condition is true |

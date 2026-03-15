@@ -1,0 +1,229 @@
+---
+title: "Profile"
+description: "Endpoints for reading and updating user profiles. Personal info and social links are stored in PostgreSQL; avatar, experience, and education are stored in MongoDB."
+---
+
+<Note>
+  All `/api/profile/*` endpoints require an authenticated session. MongoDB metadata (avatar, experience, education) is read and written on a best-effort basis — if MongoDB is unavailable, the endpoint still succeeds and `mongoSaved: false` is returned.
+</Note>
+
+## Data sources
+
+| Field group | Storage |
+|---|---|
+| `personalInfo` (phone, location, bio, birth date) | PostgreSQL `user_profiles` |
+| `socials` (GitHub, LinkedIn, Twitter, portfolio) | PostgreSQL `user_profiles` |
+| `metadata.skills` | PostgreSQL `user_profiles` (JSONB) |
+| `metadata.avatarUrl` | MongoDB `ProfileMetadata` |
+| `metadata.experience` | MongoDB `ProfileMetadata` |
+| `metadata.education` | MongoDB `ProfileMetadata` |
+| `progress` (Moodle week, avg score) | PostgreSQL `moodle_progress` |
+
+---
+
+## Get profile
+
+**`GET /api/profile`** — requires authentication
+
+Returns the full profile for the currently authenticated user.
+
+**`GET /api/profile/:id`** — requires authentication
+
+Returns the profile for any user by ID. Access rules:
+
+- **Coder**: can only fetch their own profile. Attempting to view another user's profile returns `403`.
+- **TL**: can fetch profiles of coders in their own clan only. Attempting to view a coder from a different clan, or a non-coder, returns `403`.
+
+### Path parameters
+
+<ParamField path="id" type="number">
+  User ID. When omitted, returns the authenticated user's own profile.
+</ParamField>
+
+### Response
+
+<ResponseField name="id" type="number">User ID.</ResponseField>
+<ResponseField name="email" type="string">Email address.</ResponseField>
+<ResponseField name="fullName" type="string">Display name.</ResponseField>
+<ResponseField name="role" type="string">`coder` or `tl`.</ResponseField>
+<ResponseField name="clanId" type="string">Clan identifier, or `null`.</ResponseField>
+
+<ResponseField name="stats" type="object">
+  TL-only: `{ clans: 1, coders: N }`. For coders, both fields are `0`.
+</ResponseField>
+
+<ResponseField name="personalInfo" type="object">
+  <Expandable title="properties">
+    <ResponseField name="phone" type="string">Phone number.</ResponseField>
+    <ResponseField name="location" type="string">City or region.</ResponseField>
+    <ResponseField name="birthDate" type="string">Date of birth (ISO 8601).</ResponseField>
+    <ResponseField name="bio" type="string">Short biography.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="socials" type="object">
+  <Expandable title="properties">
+    <ResponseField name="github" type="string">GitHub profile URL.</ResponseField>
+    <ResponseField name="linkedin" type="string">LinkedIn profile URL.</ResponseField>
+    <ResponseField name="twitter" type="string">Twitter/X profile URL.</ResponseField>
+    <ResponseField name="portfolio" type="string">Portfolio or personal site URL.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="metadata" type="object">
+  <Expandable title="properties">
+    <ResponseField name="avatarUrl" type="string">Avatar image URL (from MongoDB), or `null`.</ResponseField>
+    <ResponseField name="skills" type="string[]">List of skill tags (from PostgreSQL).</ResponseField>
+    <ResponseField name="experience" type="object[]">Work experience records (from MongoDB).</ResponseField>
+    <ResponseField name="education" type="object[]">Education records (from MongoDB).</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="progress" type="object">
+  <Expandable title="properties">
+    <ResponseField name="currentWeek" type="number">Current Moodle week (default 1).</ResponseField>
+    <ResponseField name="averageScore" type="number">Moodle average score (default 0).</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<CodeGroup>
+
+```bash cURL (own profile)
+curl http://localhost:3000/api/profile \
+  -b cookies.txt
+```
+
+```bash cURL (by ID, TL only)
+curl http://localhost:3000/api/profile/7 \
+  -b cookies.txt
+```
+
+</CodeGroup>
+
+**200 OK**
+
+```json
+{
+  "id": 7,
+  "email": "alice@example.com",
+  "fullName": "Alice Smith",
+  "role": "coder",
+  "clanId": "clan-42",
+  "stats": { "clans": 0, "coders": 0 },
+  "personalInfo": {
+    "phone": "+57 300 0000000",
+    "location": "Medellín, Colombia",
+    "birthDate": "2000-05-15",
+    "bio": "Passionate about backend development."
+  },
+  "socials": {
+    "github": "https://github.com/alice",
+    "linkedin": "",
+    "twitter": "",
+    "portfolio": ""
+  },
+  "metadata": {
+    "avatarUrl": "https://cdn.example.com/avatars/alice.jpg",
+    "skills": ["JavaScript", "Node.js", "PostgreSQL"],
+    "experience": [],
+    "education": []
+  },
+  "progress": {
+    "currentWeek": 3,
+    "averageScore": 78.5
+  }
+}
+```
+
+**403 Forbidden** — coder attempting to view another user, or TL attempting to view a coder outside their clan.
+
+**404 Not Found** — user ID does not exist.
+
+---
+
+## Update profile
+
+**`POST /api/profile/update`** — requires authentication
+
+Updates the authenticated user's profile. Uses upsert semantics in PostgreSQL — the first call creates the profile row; subsequent calls update it. Only provided fields are written; omitted fields retain their previous values.
+
+<Note>
+  Sending only `metadata.avatarUrl` (for avatar auto-save) is valid and will not overwrite other PostgreSQL fields — the handler reads existing values before writing.
+</Note>
+
+### Request body
+
+<ParamField body="personalInfo" type="object">
+  <Expandable title="properties">
+    <ParamField body="phone" type="string">Phone number.</ParamField>
+    <ParamField body="location" type="string">City or region.</ParamField>
+    <ParamField body="birthDate" type="string">Date of birth (ISO 8601).</ParamField>
+    <ParamField body="bio" type="string">Short biography.</ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField body="socials" type="object">
+  <Expandable title="properties">
+    <ParamField body="github" type="string">GitHub profile URL.</ParamField>
+    <ParamField body="linkedin" type="string">LinkedIn profile URL.</ParamField>
+    <ParamField body="twitter" type="string">Twitter/X profile URL.</ParamField>
+    <ParamField body="portfolio" type="string">Portfolio or personal site URL.</ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField body="metadata" type="object">
+  <Expandable title="properties">
+    <ParamField body="skills" type="string[]">List of skill tags. Replaces the existing list.</ParamField>
+    <ParamField body="avatarUrl" type="string">Avatar URL to store in MongoDB.</ParamField>
+    <ParamField body="experience" type="object[]">Work experience records to store in MongoDB.</ParamField>
+    <ParamField body="education" type="object[]">Education records to store in MongoDB.</ParamField>
+  </Expandable>
+</ParamField>
+
+### Response
+
+<ResponseField name="success" type="boolean">`true` on success.</ResponseField>
+<ResponseField name="message" type="string">Confirmation message.</ResponseField>
+<ResponseField name="mongoSaved" type="boolean">`true` if MongoDB metadata was persisted. `false` if MongoDB was unavailable — PostgreSQL data was still saved.</ResponseField>
+
+<CodeGroup>
+
+```bash cURL (full update)
+curl -X POST http://localhost:3000/api/profile/update \
+  -H "Content-Type: application/json" \
+  -b cookies.txt \
+  -d '{
+    "personalInfo": {
+      "phone": "+57 300 0000000",
+      "location": "Medellín, Colombia",
+      "bio": "Passionate about backend development."
+    },
+    "socials": {
+      "github": "https://github.com/alice",
+      "linkedin": "https://linkedin.com/in/alice"
+    },
+    "metadata": {
+      "skills": ["JavaScript", "Node.js", "PostgreSQL"],
+      "avatarUrl": "https://cdn.example.com/avatars/alice.jpg"
+    }
+  }'
+```
+
+```bash cURL (avatar only)
+curl -X POST http://localhost:3000/api/profile/update \
+  -H "Content-Type: application/json" \
+  -b cookies.txt \
+  -d '{"metadata": {"avatarUrl": "https://cdn.example.com/avatars/alice-new.jpg"}}'
+```
+
+</CodeGroup>
+
+**200 OK**
+
+```json
+{
+  "success": true,
+  "message": "Perfil actualizado.",
+  "mongoSaved": true
+}
+```

@@ -1,0 +1,102 @@
+---
+title: "AI microservice overview"
+description: "Overview of the Kairo AI microservice, its endpoints, models, and how the Node.js gateway proxies requests to it."
+---
+
+<Note>
+  This is an **internal service**. All endpoints are called by the Node.js gateway — not directly by the frontend. The Node.js gateway exposes these capabilities under `/api/ai/*` routes, enforcing authentication and role checks before forwarding payloads to the Python service.
+</Note>
+
+The Kairo AI microservice is a Python FastAPI application (v2.3.0) running on port `8000`. It handles all generative AI workloads: personalised learning plans, focus cards, coding exercises, clan reports, AI tutoring, and semantic resource search.
+
+## Base URL
+
+```
+http://localhost:8000
+```
+
+In production the Node.js gateway reads the address from the `PYTHON_API_URL` environment variable.
+
+## Models and embeddings
+
+| Component | Value |
+|---|---|
+| LLM provider | Groq API |
+| Default model | `llama-3.3-70b-versatile` |
+| Configurable via | `MODEL_NAME` env var |
+| Embedding model | `all-MiniLM-L6-v2` |
+| Embedding dimensions | 384 |
+| Embedding use | Semantic resource search (`/search-resources`) |
+
+## Health check
+
+```http
+GET /health
+```
+
+Called by the Node.js gateway (`GET /api/ai/health`) and by the Railway health probe.
+
+<CodeGroup>
+
+```bash cURL
+curl http://localhost:8000/health
+```
+
+</CodeGroup>
+
+**Response**
+
+```json
+{
+  "status": "online",
+  "service": "Kairo AI Engine",
+  "version": "2.3.0",
+  "model": "llama-3.3-70b-versatile",
+  "embeddings": "all-MiniLM-L6-v2 (384d)",
+  "environment": "development",
+  "endpoints": [
+    "POST /generate-plan",
+    "POST /generate-focus-cards",
+    "POST /chat/ask",
+    "POST /generate-report",
+    "POST /generate-exercise",
+    "POST /exercise/{id}/submit",
+    "POST /search-resources"
+  ]
+}
+```
+
+If the embedding model failed to load, `embeddings` returns `"unavailable"` instead.
+
+## How Node.js proxies requests
+
+The Node.js gateway (`iaControllers.js`) enriches requests before forwarding them:
+
+1. Authenticates the caller via JWT (`isAuthenticated` middleware).
+2. Enforces role-based access (`hasRole('coder')` or `hasRole('tl')`).
+3. Fetches supplementary data from Supabase (module ID, struggling topics, clan, risk counts).
+4. Calls `callPythonApi(path, payload)` which posts to `PYTHON_API_URL`.
+5. Returns the Python response to the frontend, optionally logging to `ai_generation_log`.
+
+## Endpoint categories
+
+<CardGroup cols={2}>
+  <Card title="Generate learning plan" icon="map" href="/api/ai/generate-plan">
+    POST /generate-plan — Builds a personalised weekly learning roadmap for a coder based on their soft skills and Moodle progress.
+  </Card>
+  <Card title="Generate focus cards" icon="layers" href="/api/ai/focus-cards">
+    POST /generate-focus-cards — Returns six prioritised study cards (2 high, 2 medium, 2 low) tailored to the coder's current module.
+  </Card>
+  <Card title="AI chat" icon="message-circle" href="/api/ai/chat">
+    POST /chat/ask — Answers coder questions using Kairo, the AI tutor persona powered by Groq.
+  </Card>
+  <Card title="Exercise generation" icon="code" href="/api/ai/exercises">
+    POST /generate-exercise · POST /exercise/{id}/submit — Generates and caches coding exercises per plan day, and records coder submissions for TL review.
+  </Card>
+  <Card title="Report generation" icon="bar-chart" href="/api/ai/reports">
+    POST /generate-report — Produces an AI-written clan performance report and saves it to the `ai_reports` table for TL consumption.
+  </Card>
+  <Card title="Resource search" icon="search" href="/api/ai/resources">
+    POST /search-resources — Performs semantic search over curated learning resources using `all-MiniLM-L6-v2` embeddings, ranked by relevance to the requested topic.
+  </Card>
+</CardGroup>
